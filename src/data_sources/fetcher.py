@@ -6,10 +6,10 @@ Futures Exchange Daily Settlement Price Fetcher.
 Downloads raw data from SHFE, INE, GFEX, DCE, CZCE, CFFEX.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, NamedTuple
 
 import fire
 import requests
@@ -25,6 +25,15 @@ DCE_BASE_URL = "http://www.dce.com.cn"
 SHFE_BASE_URL = "http://www.shfe.com.cn"
 INE_BASE_URL = "http://www.ine.com.cn"
 GFEX_BASE_URL = "http://www.gfex.com.cn"
+
+
+class SaveContext(NamedTuple):
+    """保存文件所需的上下文信息"""
+    exchange: str
+    suffix: str
+    description: str
+    url: str
+    status_code: int
 
 
 class Fetcher:
@@ -122,34 +131,30 @@ class Fetcher:
         self,
         content: bytes,
         trade_date: str,
-        exchange: str,
-        suffix: str,
-        description: str,
-        url: str,
-        status_code: int,
+        ctx: SaveContext,
     ) -> Path:
         """Save content to file and record metadata."""
         local_filename = self._build_filename(
-            trade_date, exchange, suffix, description
+            trade_date, ctx.exchange, ctx.suffix, ctx.description
         )
         filepath = RAW_DATA_DIR / local_filename
         with open(filepath, "wb") as f:
             f.write(content)
-        self.logger.info("Saved %s raw data to %s", exchange, filepath)
+        self.logger.info("Saved %s raw data to %s", ctx.exchange, filepath)
 
         original_source = self._extract_original_filename(
-            exchange, url, trade_date
+            ctx.exchange, ctx.url, trade_date
         )
         self._write_metadata(
             {
                 "trade_date": trade_date,
-                "exchange": exchange,
-                "url": url,
-                "status_code": status_code,
+                "exchange": ctx.exchange,
+                "url": ctx.url,
+                "status_code": ctx.status_code,
                 "original_source": original_source,
                 "local_filename": local_filename,
                 "local_path": str(filepath),
-                "download_time": datetime.now(timezone.utc).isoformat(),
+                "download_time": datetime.now().strftime('%Y%m%dT%H%M%S'),
                 "file_size_bytes": len(content),
                 "verified": False,
             }
@@ -176,11 +181,8 @@ class Fetcher:
                 token = data["data"]["token"]
                 self.logger.info("DCE token obtained successfully")
                 return token
-            else:
-                self.logger.error(
-                    "DCE token request failed: %s", data.get("msg")
-                )
-                return None
+            self.logger.error("DCE token request failed: %s", data.get("msg"))
+            return None
         except Exception as e:
             self.logger.error(
                 "Exception while getting DCE token: %s", e, exc_info=True
@@ -193,18 +195,25 @@ class Fetcher:
     def _fetch_shfe_settlement(self, trade_date: str, url: str) -> Dict:
         """Fetch SHFE daily settlement parameters."""
         try:
-            resp = requests.get(url, timeout=30)
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Content-Type": "application/x-www-form-urlencoded",
+            }
+            resp = requests.get(url, headers=headers, timeout=30)
             resp.raise_for_status()
             if len(resp.content) == 0:
                 raise ValueError("Empty content")
             filepath = self._save_and_record(
                 resp.content,
                 trade_date,
-                "SHFE",
-                "dat",
-                "SettlementParameters",
-                url,
-                resp.status_code,
+                SaveContext(
+                    "SHFE", "dat", "SettlementParameters",
+                    url, resp.status_code
+                )
             )
             return {"success": True, "filepath": filepath}
         except Exception as e:
@@ -214,18 +223,25 @@ class Fetcher:
     def _fetch_ine_settlement(self, trade_date: str, url: str) -> Dict:
         """Fetch INE daily settlement parameters."""
         try:
-            resp = requests.get(url, timeout=30)
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Content-Type": "application/x-www-form-urlencoded",
+            }
+            resp = requests.get(url, headers=headers, timeout=30)
             resp.raise_for_status()
             if len(resp.content) == 0:
                 raise ValueError("Empty content")
             filepath = self._save_and_record(
                 resp.content,
                 trade_date,
-                "INE",
-                "dat",
-                "SettlementParameters",
-                url,
-                resp.status_code,
+                SaveContext(
+                    "INE", "dat", "SettlementParameters",
+                    url, resp.status_code
+                ),
             )
             return {"success": True, "filepath": filepath}
         except Exception as e:
@@ -265,11 +281,10 @@ class Fetcher:
             filepath = self._save_and_record(
                 content,
                 trade_date,
-                "GFEX",
-                "json",
-                "SettlementParameters",
-                url,
-                resp.status_code,
+                SaveContext(
+                    "GFEX", "json", "SettlementParameters",
+                    url, resp.status_code
+                ),
             )
             self.logger.info(
                 "GFEX settlement data fetched, %d records", len(records)
@@ -311,11 +326,10 @@ class Fetcher:
             filepath = self._save_and_record(
                 content,
                 trade_date,
-                "DCE",
-                "json",
-                "SettlementParameters",
-                url,
-                resp.status_code,
+                SaveContext(
+                    "DCE", "json", "SettlementParameters",
+                    url, resp.status_code
+                ),
             )
             self.logger.info(
                 "DCE settlement data fetched, %d records", len(data["data"])
@@ -328,18 +342,25 @@ class Fetcher:
     def _fetch_czce_settlement(self, trade_date: str, url: str) -> Dict:
         """Fetch CZCE daily settlement parameters."""
         try:
-            resp = requests.get(url, timeout=30)
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Content-Type": "application/x-www-form-urlencoded",
+            }
+            resp = requests.get(url, headers=headers, timeout=30)
             resp.raise_for_status()
             if len(resp.content) == 0:
                 raise ValueError("Empty content")
             filepath = self._save_and_record(
                 resp.content,
                 trade_date,
-                "CZCE",
-                "txt",
-                "SettlementParameters",
-                url,
-                resp.status_code,
+                SaveContext(
+                    "CZCE", "txt", "SettlementParameters",
+                    url, resp.status_code
+                ),
             )
             return {"success": True, "filepath": filepath}
         except Exception as e:
@@ -370,13 +391,11 @@ class Fetcher:
             ):
                 if b"\xcd\xf8\xd2\xb3\xb4\xed\xce\xf3" in resp.content:
                     self.logger.warning(
-                        "CFFEX returned 404 error page for %s, assuming no data.",
+                        "CFFEX returned 404 error page for %s, no data.",
                         trade_date
                     )
-                    # 返回特殊状态表示无数据，不视为失败
                     return {"success": True, "no_data": True}
-                else:
-                    raise ValueError("HTML response instead of CSV")
+                raise ValueError("HTML response instead of CSV")
 
             # 尝试解码以校验结构
             content_str = None
@@ -398,18 +417,16 @@ class Fetcher:
             required_fields = ("合约代码", "今开盘", "今收盘")
             if not any(field in header for field in required_fields):
                 self.logger.warning(
-                    "CFFEX CSV header missing expected fields: %s",header[:100]
+                    "CFFEX CSV header unexpected: %s", header[:100]
                 )
                 raise ValueError("CSV header missing required fields")
 
             filepath = self._save_and_record(
                 resp.content,
                 trade_date,
-                "CFFEX",
-                "csv",
-                "MarketData",
-                url,
-                resp.status_code,
+                SaveContext(
+                    "CFFEX", "csv", "MarketData", url, resp.status_code
+                ),
             )
             self.logger.info(
                 "CFFEX market data fetched, %d data rows", len(lines) - 1
@@ -436,7 +453,7 @@ class Fetcher:
             len(failed_tasks),
         )
 
-        for exchange, fetch_func, suffix, description, url_template in failed_tasks:
+        for exchange, fetch_func, _, _, url_template in failed_tasks:
             self.logger.info("Second attempt for %s", exchange)
             # Rebuild URL
             if exchange in ("CZCE", "CFFEX"):
@@ -455,7 +472,7 @@ class Fetcher:
                 self.logger.info("Second round succeeded for %s", exchange)
             else:
                 self.logger.alert(
-                    "CRITICAL: Second round failed for %s on %s. Data missing!",
+                    "CRITICAL: Second round request failed for %s on %s",
                     exchange,
                     trade_date,
                 )
@@ -464,9 +481,6 @@ class Fetcher:
     # Public Entry Point
     # ------------------------------------------------------------------------
     def run(self, trade_date: Optional[str] = None) -> None:
-        """
-        Main execution method.
-        """
         if trade_date is None:
             trade_date = datetime.now().strftime("%Y%m%d")
 
@@ -475,18 +489,18 @@ class Fetcher:
         )
 
         failed_tasks = []
-        for exchange, fetch_func, suffix, description, url_template in self.tasks:
+        for exchange, fetch_func, suffix, description, url_temp in self.tasks:
             # Prepare URL
             if exchange in ("CZCE", "CFFEX"):
                 year = trade_date[:4]
                 month = trade_date[4:6]
                 day = trade_date[6:8]
                 if exchange == "CZCE":
-                    url = url_template.format(year, trade_date)
+                    url = url_temp.format(year, trade_date)
                 else:  # CFFEX
-                    url = url_template.format(year, month, day, trade_date)
+                    url = url_temp.format(year, month, day, trade_date)
             else:
-                url = url_template.format(trade_date)
+                url = url_temp.format(trade_date)
 
             self.logger.info("Fetching %s data from %s", exchange, url)
             result = fetch_func(trade_date, url)
@@ -494,7 +508,7 @@ class Fetcher:
             # 如果成功但标记为 no_data，也视为成功，不加入重试队列
             if not result.get("success"):
                 failed_tasks.append(
-                    (exchange, fetch_func, suffix, description, url_template)
+                    (exchange, fetch_func, suffix, description, url_temp)
                 )
 
         self._retry_failed_exchanges(failed_tasks, trade_date)
