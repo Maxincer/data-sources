@@ -2,85 +2,60 @@
 # -*- coding: utf-8 -*-
 
 """
-Futures Exchange Daily Settlement Data Fetcher.
+Futures Exchange Daily Settlement Price Fetcher.
 Downloads raw data from SHFE, INE, GFEX, DCE, CZCE, CFFEX.
 """
 
-# ============================================================================
-# Standard library imports (pylint compliant order)
-# ============================================================================
-import json
-import sys
-import time
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
-# ============================================================================
-# Third-party imports
-# ============================================================================
 import fire
 import requests
 
-# ============================================================================
-# Local application imports
-# ============================================================================
 from utils.logging_config import get_logger
 
-# ============================================================================
-# Global Configuration
-# ============================================================================
 RAW_DATA_DIR = Path("./data/raw")
 RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-# Metadata file (JSON Lines format)
 METADATA_FILE = RAW_DATA_DIR / ".metadata.jsonl"
-
-# DCE API credentials
 DCE_API_KEY = "ofxc69rpmd59"
 DCE_API_SECRET = "2UdFW^2G4!4^7#@URqWx"
 DCE_BASE_URL = "http://www.dce.com.cn"
+SHFE_BASE_URL = "http://www.shfe.com.cn"
+INE_BASE_URL = "http://www.ine.com.cn"
+GFEX_BASE_URL = "http://www.gfex.com.cn"
 
 
-# ============================================================================
-# Main Fetcher Class
-# ============================================================================
 class Fetcher:
-    """
-    Fetcher for daily settlement and market data from Chinese futures exchanges.
-    """
-
     def __init__(self):
-        """Initialize logger and define download tasks."""
         self.logger = get_logger(
             name="Fetcher",
             level="INFO",
             dirpath_logs="./logs",
             logfile_basename="Fetcher",
         )
-
-        # Tasks: (exchange, fetch_method, suffix, description, url_template)
         self.tasks = [
             (
                 "SHFE",
                 self._fetch_shfe_settlement,
                 "dat",
                 "SettlementParameters",
-                "https://www.shfe.com.cn/data/tradedata/future/dailydata/js{}.dat",
+                SHFE_BASE_URL + "/data/tradedata/future/dailydata/js{}.dat"
             ),
             (
                 "INE",
                 self._fetch_ine_settlement,
                 "dat",
                 "SettlementParameters",
-                "https://www.ine.com.cn/data/tradedata/future/dailydata/js{}.dat",
+                INE_BASE_URL + "/data/tradedata/future/dailydata/js{}.dat"
             ),
             (
                 "GFEX",
                 self._fetch_gfex_settlement,
                 "json",
                 "SettlementParameters",
-                "http://www.gfex.com.cn/u/interfacesWebTiFutAndOptSettle/loadList",
+                GFEX_BASE_URL + "/u/interfacesWebTiFutAndOptSettle/loadList"
             ),
             (
                 "DCE",
@@ -107,38 +82,34 @@ class Fetcher:
             ),
         ]
 
-    # ------------------------------------------------------------------------
-    # Utility Methods
-    # ------------------------------------------------------------------------
     def _build_filename(
         self, trade_date: str, exchange: str, suffix: str, description: str
     ) -> str:
-        """Construct filename as {trade_date}.{exchange}.{description}.{suffix}"""
         return f"{trade_date}.{exchange}.{description}.{suffix}"
 
     def _extract_original_filename(
         self, exchange: str, url: str, trade_date: str
     ) -> str:
-        """Extract the original filename or identifier from the source URL."""
         if exchange in ("SHFE", "INE"):
-            return f"js{trade_date}.dat"
+            fn = f"js{trade_date}.dat"
         elif exchange == "CZCE":
-            return "FutureDataClearParams.txt"
+            fn = "FutureDataClearParams.txt"
         elif exchange == "CFFEX":
-            return f"{trade_date}_1.csv"
+            fn = f"{trade_date}_1.csv"
         elif exchange == "GFEX":
-            return f"loadList?trade_date={trade_date}"
+            fn = f"loadList?trade_date={trade_date}"
         elif exchange == "DCE":
-            return "futAndOptSettle (DCE API)"
+            fn = "futAndOptSettle (DCE API)"
         else:
-            return url.split("/")[-1] or "unknown"
+            fn = url.split("/")[-1] or "unknown"
+        return fn
 
     def _write_metadata(self, record: Dict) -> None:
         """Append a metadata record in JSON Lines format."""
         try:
             with open(METADATA_FILE, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
-            self.logger.debug("Metadata written for %s", record.get("exchange"))
+            self.logger.debug("Metadata written for %s",record.get("exchange"))
         except Exception as e:
             self.logger.error(
                 "Failed to write metadata for %s: %s",
@@ -533,5 +504,9 @@ class Fetcher:
         )
 
 
-if __name__ == "__main__":
+def main():
     fire.Fire(Fetcher)
+
+
+if __name__ == "__main__":
+    main()

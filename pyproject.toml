@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "data-sources"
+version = "0.1.0"
+description = "Maxincer's independent data sources"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.28.0",
+    "fire>=0.5.0",
+]
+
+[project.scripts]
+futures-fetch = "data_sources.fetcher:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
