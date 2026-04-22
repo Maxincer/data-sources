@@ -28,7 +28,6 @@ GFEX_BASE_URL = "http://www.gfex.com.cn"
 
 
 class SaveContext(NamedTuple):
-    """保存文件所需的上下文信息"""
     exchange: str
     suffix: str
     description: str
@@ -161,9 +160,6 @@ class Fetcher:
         )
         return filepath
 
-    # ------------------------------------------------------------------------
-    # DCE Token Acquisition
-    # ------------------------------------------------------------------------
     def _get_dce_token(self) -> Optional[str]:
         """Retrieve a valid Bearer token for the DCE API."""
         try:
@@ -189,9 +185,6 @@ class Fetcher:
             )
             return None
 
-    # ------------------------------------------------------------------------
-    # Exchange-Specific Fetch Methods
-    # ------------------------------------------------------------------------
     def _fetch_shfe_settlement(self, trade_date: str, url: str) -> Dict:
         """Fetch SHFE daily settlement parameters."""
         try:
@@ -265,7 +258,6 @@ class Fetcher:
             )
             resp.raise_for_status()
 
-            # 解析 JSON 响应，结构为 {"code": "0", "msg": "...", "data": [...]}
             data = resp.json()
             if not isinstance(data, dict) or "data" not in data:
                 raise ValueError("Invalid response structure")
@@ -383,7 +375,6 @@ class Fetcher:
             if len(resp.content) == 0:
                 raise ValueError("Empty content")
 
-            # 检测是否返回 HTML 404 错误页面
             content_preview = resp.content[:200]
             if (
                 b"<html" in content_preview.lower()
@@ -397,7 +388,6 @@ class Fetcher:
                     return {"success": True, "no_data": True}
                 raise ValueError("HTML response instead of CSV")
 
-            # 尝试解码以校验结构
             content_str = None
             for enc in ("utf-8", "gbk", "gb2312", "latin-1"):
                 try:
@@ -412,7 +402,6 @@ class Fetcher:
             if len(lines) < 2:
                 raise ValueError("CSV has insufficient rows")
 
-            # 检查中文列名
             header = lines[0].strip()
             required_fields = ("合约代码", "今开盘", "今收盘")
             if not any(field in header for field in required_fields):
@@ -436,9 +425,6 @@ class Fetcher:
             self.logger.error("CFFEX fetch failed: %s", e, exc_info=True)
             return {"success": False, "error": str(e)}
 
-    # ------------------------------------------------------------------------
-    # Second Round Retry Logic
-    # ------------------------------------------------------------------------
     def _retry_failed_exchanges(
         self, failed_tasks: List[tuple], trade_date: str
     ) -> None:
@@ -455,7 +441,6 @@ class Fetcher:
 
         for exchange, fetch_func, _, _, url_template in failed_tasks:
             self.logger.info("Second attempt for %s", exchange)
-            # Rebuild URL
             if exchange in ("CZCE", "CFFEX"):
                 year = trade_date[:4]
                 month = trade_date[4:6]
@@ -477,9 +462,6 @@ class Fetcher:
                     trade_date,
                 )
 
-    # ------------------------------------------------------------------------
-    # Public Entry Point
-    # ------------------------------------------------------------------------
     def run(self, trade_date: Optional[str] = None) -> None:
         if trade_date is None:
             trade_date = datetime.now().strftime("%Y%m%d")
@@ -490,14 +472,13 @@ class Fetcher:
 
         failed_tasks = []
         for exchange, fetch_func, suffix, description, url_temp in self.tasks:
-            # Prepare URL
             if exchange in ("CZCE", "CFFEX"):
                 year = trade_date[:4]
                 month = trade_date[4:6]
                 day = trade_date[6:8]
                 if exchange == "CZCE":
                     url = url_temp.format(year, trade_date)
-                else:  # CFFEX
+                else:
                     url = url_temp.format(year, month, day, trade_date)
             else:
                 url = url_temp.format(trade_date)
@@ -505,7 +486,6 @@ class Fetcher:
             self.logger.info("Fetching %s data from %s", exchange, url)
             result = fetch_func(trade_date, url)
 
-            # 如果成功但标记为 no_data，也视为成功，不加入重试队列
             if not result.get("success"):
                 failed_tasks.append(
                     (exchange, fetch_func, suffix, description, url_temp)

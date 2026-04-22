@@ -13,7 +13,11 @@ dependencies = [
 ]
 
 [project.scripts]
-futures-fetch = "data_sources.fetcher:main"
+fetcher = "data_sources.fetcher:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["data_sources*"]
+
+[tool.setuptools.package-dir]
+"mxz_utils" = "libs/mxz-utils/src/mxz_utils"
