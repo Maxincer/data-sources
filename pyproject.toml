@@ -16,8 +16,5 @@ dependencies = [
 fetcher = "data_sources.fetcher:main"
 
 [tool.setuptools.packages.find]
-where = ["src"]
-include = ["data_sources*"]
-
-[tool.setuptools.package-dir]
-"mxz_utils" = "libs/mxz-utils/src/mxz_utils"
+where = ["src", "libs/mxz-utils/src"]
+include = ["data_sources*", "mxz_utils*"]
