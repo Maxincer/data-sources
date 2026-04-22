@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, NamedTuple
 import fire
 import requests
 
-from utils.logging_config import get_logger
+from mxz_utils.logging_config import get_logger
 
 RAW_DATA_DIR = Path("./data/raw")
 RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
