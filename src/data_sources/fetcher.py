@@ -43,6 +43,14 @@ class Fetcher:
             dirpath_logs="./logs",
             logfile_basename="Fetcher",
         )
+        self.fake_headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
         self.tasks = [
             (
                 "SHFE",
@@ -166,7 +174,6 @@ class Fetcher:
             url = f"{DCE_BASE_URL}/dceapi/cms/auth/accessToken"
             headers = {"apikey": DCE_API_KEY}
             payload = {"secret": DCE_API_SECRET}
-
             resp = requests.post(
                 url, headers=headers, json=payload, timeout=15
             )
@@ -188,15 +195,7 @@ class Fetcher:
     def _fetch_shfe_settlement(self, trade_date: str, url: str) -> Dict:
         """Fetch SHFE daily settlement parameters."""
         try:
-            headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
-                "Content-Type": "application/x-www-form-urlencoded",
-            }
-            resp = requests.get(url, headers=headers, timeout=30)
+            resp = requests.get(url, headers=self.fake_headers, timeout=30)
             resp.raise_for_status()
             if len(resp.content) == 0:
                 raise ValueError("Empty content")
@@ -216,15 +215,7 @@ class Fetcher:
     def _fetch_ine_settlement(self, trade_date: str, url: str) -> Dict:
         """Fetch INE daily settlement parameters."""
         try:
-            headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
-                "Content-Type": "application/x-www-form-urlencoded",
-            }
-            resp = requests.get(url, headers=headers, timeout=30)
+            resp = requests.get(url, headers=self.fake_headers, timeout=30)
             resp.raise_for_status()
             if len(resp.content) == 0:
                 raise ValueError("Empty content")
@@ -244,17 +235,9 @@ class Fetcher:
     def _fetch_gfex_settlement(self, trade_date: str, url: str) -> Dict:
         """Fetch GFEX daily settlement parameters via POST."""
         try:
-            headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
-                "Content-Type": "application/x-www-form-urlencoded",
-            }
             payload = {"trade_date": trade_date}
             resp = requests.post(
-                url, data=payload, headers=headers, timeout=30
+                url, data=payload, headers=self.fake_headers, timeout=30
             )
             resp.raise_for_status()
 
@@ -334,15 +317,7 @@ class Fetcher:
     def _fetch_czce_settlement(self, trade_date: str, url: str) -> Dict:
         """Fetch CZCE daily settlement parameters."""
         try:
-            headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
-                "Content-Type": "application/x-www-form-urlencoded",
-            }
-            resp = requests.get(url, headers=headers, timeout=30)
+            resp = requests.get(url, headers=self.fake_headers, timeout=30)
             resp.raise_for_status()
             if len(resp.content) == 0:
                 raise ValueError("Empty content")
@@ -362,14 +337,7 @@ class Fetcher:
     def _fetch_cffex_market(self, trade_date: str, url: str) -> Dict:
         """Fetch CFFEX daily market data (CSV format)."""
         try:
-            headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                )
-            }
-            resp = requests.get(url, headers=headers, timeout=30)
+            resp = requests.get(url, headers=self.fake_headers, timeout=30)
             resp.raise_for_status()
 
             if len(resp.content) == 0:
@@ -468,6 +436,8 @@ class Fetcher:
     def run(self, trade_date: Optional[str] = None) -> None:
         if trade_date is None:
             trade_date = datetime.now().strftime("%Y%m%d")
+        else:
+            trade_date = str(trade_date)
 
         self.logger.info(
             "=== Starting futures data download for %s ===", trade_date
