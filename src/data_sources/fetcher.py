@@ -431,15 +431,16 @@ class Fetcher:
         """
         Perform a second round of attempts for failed exchanges.
         """
+        failed_tasks_after_retry = []
         if not failed_tasks:
-            return
+            return failed_tasks_after_retry
 
         self.logger.info(
             "=== Starting second round retry for %d failed exchange(s) ===",
             len(failed_tasks),
         )
-
-        for exchange, fetch_func, _, _, url_template in failed_tasks:
+        for failed_task in failed_tasks:
+            exchange, fetch_func, _, _, url_template = failed_task
             self.logger.info("Second attempt for %s", exchange)
             if exchange in ("CZCE", "CFFEX"):
                 year = trade_date[:4]
@@ -451,16 +452,18 @@ class Fetcher:
                     url = url_template.format(year, month, day, trade_date)
             else:
                 url = url_template.format(trade_date)
-
             result = fetch_func(trade_date, url)
             if result.get("success"):
                 self.logger.info("Second round succeeded for %s", exchange)
             else:
+                failed_tasks_after_retry.append(failed_task)
                 self.logger.alert(
-                    "CRITICAL: Second round request failed for %s on %s",
+                    "CRITICAL: Second round request failed for %s on %s: %s",
                     exchange,
                     trade_date,
+                    result['error']
                 )
+        return failed_tasks_after_retry
 
     def run(self, trade_date: Optional[str] = None) -> None:
         if trade_date is None:
@@ -491,8 +494,11 @@ class Fetcher:
                     (exchange, fetch_func, suffix, description, url_temp)
                 )
 
-        self._retry_failed_exchanges(failed_tasks, trade_date)
-
+        if not self._retry_failed_exchanges(failed_tasks, trade_date):
+            self.logger.alert(
+                f'{self.logger.name}: '
+                f'All raw data for {trade_date} downloaded'
+            )
         self.logger.info(
             "=== Download process completed for %s ===", trade_date
         )
