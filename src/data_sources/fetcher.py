@@ -1002,6 +1002,39 @@ class Fetcher:
             if d > gfe_latest:
                 gfe_latest = d
 
+        # ---- CFFEX Settlement 同步 ----
+        from data_sources.models import get_cffex_settlement_available
+        try:
+            server_files = get_cffex_settlement_available()
+            if server_files:
+                server_dates = {s["date"] for s in server_files}
+                self.logger.info(
+                    "CFFEX Settlement: 服务端有 %d 个文件 (%s~%s)",
+                    len(server_files), server_files[-1]["date"], server_files[0]["date"],
+                )
+                for entry in server_files:
+                    fname = f"{entry['date']}.CFFEX.SettlementParameters.csv"
+                    fpath = RAW_DATA_DIR / fname
+                    if fpath.exists():
+                        continue
+                    self.logger.info("下载缺失的 CFFEX Settlement: %s", fname)
+                    try:
+                        resp = requests.get(entry["url"], headers=self.fake_headers, timeout=30)
+                        resp.raise_for_status()
+                        with open(fpath, "wb") as f:
+                            f.write(resp.content)
+                        self.logger.info("  ✅ %s 已保存 (%d bytes)", fname, len(resp.content))
+                    except Exception as e:
+                        self.logger.warning("  ⚠ %s 下载失败: %s", fname, e)
+                # 清理本地多余文件
+                for fpath in sorted(RAW_DATA_DIR.glob("*.CFFEX.SettlementParameters.csv")):
+                    d = fpath.name[:8]
+                    if d >= "20260401" and d not in server_dates:
+                        fpath.unlink()
+                        self.logger.warning("  删除本地多余文件: %s", fpath.name)
+        except Exception as e:
+            self.logger.warning("CFFEX Settlement 同步失败: %s", e)
+
         for config in self.task_configs:
             task = Task.from_config(config, trade_date)
 

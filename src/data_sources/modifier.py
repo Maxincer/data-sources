@@ -525,3 +525,47 @@ def calc_shfe_ine_limit_prices(pre_settle: float, limit_pct_up: float,
 
 
 # ===================================================================
+
+
+# ===================================================================
+# 12. 结算参数前向填充（Forward Fill）
+# ===================================================================
+
+
+def forward_fill_settlement(records: list) -> list:
+    """
+    交易所不定时发布结算参数时，未发布日 settle/maxup/maxdown 为 NULL。
+    按合约分组、按日期排序，用上次非 NULL 值前向填充。
+
+    适用场景：CFFEX SettlementParameters 不定时发布；
+             其他交易所的结算参数空窗期。
+    """
+    from collections import defaultdict
+
+    by_code: dict[str, list[dict]] = defaultdict(list)
+    for rec in records:
+        by_code[rec.get("code", "")].append(rec)
+
+    for _code, recs in by_code.items():
+        recs.sort(key=lambda r: r.get("date", ""))
+        last_settle = None
+        last_maxup = None
+        last_maxdown = None
+
+        for rec in recs:
+            if rec.get("settle") is not None:
+                last_settle = rec["settle"]
+            elif last_settle is not None:
+                rec["settle"] = last_settle
+
+            if rec.get("maxup") is not None:
+                last_maxup = rec["maxup"]
+            elif last_maxup is not None:
+                rec["maxup"] = last_maxup
+
+            if rec.get("maxdown") is not None:
+                last_maxdown = rec["maxdown"]
+            elif last_maxdown is not None:
+                rec["maxdown"] = last_maxdown
+
+    return records

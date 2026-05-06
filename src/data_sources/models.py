@@ -148,3 +148,35 @@ class Task:
         )
         task.fetch_func = config.fetch_func
         return task
+
+
+# ---------------------------------------------------------------------------
+# CFFEX Settlement: 同步模式辅助
+# ---------------------------------------------------------------------------
+
+
+def get_cffex_settlement_available(start_date: str = "20260401") -> list[dict]:
+    """
+    获取 CFFEX jscs.html 上所有可用的结算参数表。
+
+    Returns:
+        [{"date": "YYYYMMDD", "url": str}, ...]，按日期降序。
+        仅返回 >= start_date 的条目。
+    """
+    links = fetch_cffex_jscs_links()
+    csv_links = []
+    for link in links:
+        url = link["url"]
+        match = re.search(r"/sj/jscs/\d{6}/\d{2}/(\d{8})_1\.csv", url)
+        if match:
+            d = match.group(1)
+            if d >= start_date:
+                csv_links.append({"date": d, "url": url})
+    seen = set()
+    unique = []
+    for entry in csv_links:
+        if entry["date"] not in seen:
+            seen.add(entry["date"])
+            unique.append(entry)
+    unique.sort(key=lambda x: x["date"], reverse=True)
+    return unique
