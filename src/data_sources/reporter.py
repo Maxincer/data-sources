@@ -262,8 +262,9 @@ _FULL_FIELDS = ["open","high","low","close","volume","amt","oi",
 def _fetch_records_details(records: list, table: str, date_str: str) -> list:
     """查询记录的所有字段值。"""
     import pymysql
+    from pymysql.cursors import DictCursor
     from data_sources.verifier import DB_CONFIG
-    conn = pymysql.connect(**DB_CONFIG)
+    conn = pymysql.connect(**DB_CONFIG, cursorclass=DictCursor)
     try:
         with conn.cursor() as cur:
             dt = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
