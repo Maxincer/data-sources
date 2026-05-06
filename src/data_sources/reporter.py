@@ -158,7 +158,7 @@ def generate_daily_report(date_str: str):
     # ---- Section 3: Comparison differences ----
     try:
         comp = v.compare_all(target_date=date_str)
-        comp_lines = ["**与原表 (t_futures_info) 对比**:", ""]
+        comp_lines = ["**合约覆盖率: t_futures_info vs t_futures_info_exchange (个)**", ""]
         comp_lines.append("| 交易所 | 原表 | 新表 | 缺漏 | 多余 |")
         comp_lines.append("| :--- | ---: | ---: | ---: | ---: |")
         for ex, ec in sorted(comp.get("exchange_counts", {}).items()):
@@ -182,24 +182,18 @@ def generate_daily_report(date_str: str):
             if not has_any:
                 continue
             has_field_diff = True
-            comp_lines.append("")
-            comp_lines.append(f"**{ex} 字段差异**:")
             for field in ["open","high","low","close","volume","amt","oi",
                            "settle","maxup","maxdown","long_margin","short_margin"]:
                 s = ex_diffs.get(field, {})
                 if s["diff"] == 0 and s["missing_in_original"] == 0 and s["missing_in_new"] == 0:
                     continue
-                comp_lines.append(
-                    f"- {field}: 差异={s['diff']}, "
-                    f"原表缺={s['missing_in_original']}, "
-                    f"新表缺={s['missing_in_new']}, "
-                    f"最大偏差={s['max_deviation_pct']}%"
-                )
+                meta = f"{ex} {field}: 差{s['diff']}"
+                if s["missing_in_original"]: meta += f" 旧缺{s['missing_in_original']}"
+                if s["missing_in_new"]:     meta += f" 新缺{s['missing_in_new']}"
+                if s["max_deviation_pct"] > 0.001: meta += f" 最大{s['max_deviation_pct']}%"
+                comp_lines.append(f"  {meta}")
                 for sd in s["sample_diffs"][:2]:
-                    comp_lines.append(
-                        f"  → {sd['code']}: "
-                        f"原={sd['original']}, 新={sd['new']}"
-                    )
+                    comp_lines.append(f"    {sd['code']}: 原={sd['original']} 新={sd['new']}")
 
         if not has_field_diff:
             comp_lines.append("✅ 字段无差异")
