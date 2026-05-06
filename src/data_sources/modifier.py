@@ -114,14 +114,15 @@ def is_efp_contract(code: str) -> bool:
 def should_filter_contract(code: str) -> bool:
     """综合判断记录是否应在入库前过滤掉。
 
-    过滤规则（人为定义，非数据本身）：
+    过滤规则：
     1. EFP（期转现）— DB 中无对应记录
-
-    注意：TAS（结算价交易）保留，DB 中有对应数据。
+    2. TAS（结算价交易）— 无需入库
     """
     if not code:
         return True
     if is_efp_contract(code):
+        return True
+    if is_tas_contract(code):
         return True
     return False
 

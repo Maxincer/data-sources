@@ -13,7 +13,7 @@ import argparse
 from pathlib import Path
 
 from data_sources.parser import parse_file, ParseStats, merge_by_code_date
-from data_sources.modifier import (should_filter_contract, fill_tas_settle,
+from data_sources.modifier import (should_filter_contract,
     fix_dce_limit_prices, fix_gfe_margin, fix_gfe_limit_prices,
     fix_all_margin, fill_zero_volume_close)
 from data_sources.trade_date import prev_trading_date
@@ -28,12 +28,12 @@ def _apply_modifiers(records):
     records = fix_gfe_limit_prices(records)
     records = fix_all_margin(records)
     records = fill_zero_volume_close(records)
-    records = fill_tas_settle(records)
+
     before = len(records)
     records = [r for r in records if not should_filter_contract(r.get("code", ""))]
     filtered = before - len(records)
     if filtered:
-        print(f"  Modifier 过滤: {filtered} 条 (EFP)")
+        print(f"  Modifier 过滤: {filtered} 条 (TAS/EFP)")
     # 排除 CSI 指数数据（仅写入期货数据）
     before_csi = len(records)
     records = [r for r in records if not r.get("code", "").endswith(".CSI")]
