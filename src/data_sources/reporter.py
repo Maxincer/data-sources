@@ -142,16 +142,17 @@ def generate_daily_report(date_str: str):
         if ex == "CSI":
             continue
         stats_lines.append(f"**{ex}** ({stats[ex].get('code', {}).get('total', 0)} 条):")
-        stats_lines.append("| 字段 | 非空 | 缺失率 |")
-        stats_lines.append("| :--- | ---: | ---: |")
+        stats_lines.append("| 字段 | 非空 | 缺失率 | 异常空值 |")
+        stats_lines.append("| :--- | ---: | ---: | ---: |")
         for field in ["open","high","low","close","volume","amt","oi",
                        "settle","maxup","maxdown","long_margin","short_margin"]:
             s = stats[ex].get(field, {})
             total = s.get("total", 0)
             nn = s.get("non_null", 0)
             pct = s.get("null_pct", 0)
+            abn = s.get("abnormal_null", 0)
             icon = "✅" if pct == 0 else ("🟡" if pct < 50 else "🔴")
-            stats_lines.append(f"| {icon} {field} | {nn}/{total} | {pct}% |")
+            stats_lines.append(f"| {icon} {field} | {nn}/{total} | {pct}% | {abn} |")
         stats_lines.append("")
     sections.append("\n".join(stats_lines))
 

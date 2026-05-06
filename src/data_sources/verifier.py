@@ -319,9 +319,14 @@ class Verifier:
                 for ex in exchanges:
                     result[ex] = {}
                     for field in fields:
+                        # abnormal_null: 字段缺失且(amt缺失或amt!=0)才计数
+                        # amt字段本身缺失则始终计数
                         cur.execute(f"""
                             SELECT COUNT(*) AS total,
-                                   SUM(CASE WHEN {field} IS NOT NULL THEN 1 ELSE 0 END) AS non_null
+                                   SUM(CASE WHEN {field} IS NOT NULL THEN 1 ELSE 0 END) AS non_null,
+                                   SUM(CASE WHEN {field} IS NULL AND (
+                                       '{field}' = 'amt' OR amt IS NULL OR amt != 0
+                                   ) THEN 1 ELSE 0 END) AS abnormal_null
                             FROM future_cn.t_futures_info_exchange
                             WHERE date = '{dt}'
                               AND SUBSTRING_INDEX(code, '.', -1) = '{ex}'
@@ -332,6 +337,7 @@ class Verifier:
                         result[ex][field] = {
                             "total": total,
                             "non_null": non_null,
+                            "abnormal_null": row["abnormal_null"],
                             "null_pct": round((total - non_null) / total * 100, 1) if total > 0 else 0,
                         }
         finally:
