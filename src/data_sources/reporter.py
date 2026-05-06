@@ -137,6 +137,7 @@ def generate_daily_report(date_str: str):
 
     # ---- Section 2: Field stats ----
     stats = v.get_field_stats(date_str)
+    abnormal = v.get_abnormal_nulls(date_str)
     stats_lines = ["**字段覆盖率统计** (t_futures_info_exchange):", ""]
     for ex in sorted(stats.keys()):
         if ex == "CSI":
@@ -153,6 +154,24 @@ def generate_daily_report(date_str: str):
             abn = s.get("abnormal_null", 0)
             icon = "✅" if pct == 0 else ("🟡" if pct < 50 else "🔴")
             stats_lines.append(f"| {icon} {field} | {nn}/{total} | {pct}% | {abn} |")
+
+        # 异常空值明细
+        if ex in abnormal and abnormal[ex]:
+            stats_lines.append("")
+            stats_lines.append("异常空值明细 (按金额降序, 最多10条):")
+            stats_lines.append("| 合约 | open | high | low | close | volume | amt | oi |")
+            stats_lines.append("| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+            for rec in abnormal[ex]:
+                def fmt(v): return f"{v:>8.1f}" if v is not None else " — "
+                def fmt_i(v): return f"{v:>8,.0f}" if v is not None else " — "
+                code = rec.get("code", "")
+                parts = code.split(".")[0] if code else "?"
+                stats_lines.append(
+                    f"| {parts} | {fmt(rec.get('open'))} | {fmt(rec.get('high'))} | "
+                    f"{fmt(rec.get('low'))} | {fmt(rec.get('close'))} | "
+                    f"{fmt_i(rec.get('volume'))} | {fmt_i(rec.get('amt'))} | {fmt_i(rec.get('oi'))} |"
+                )
+
         stats_lines.append("")
     sections.append("\n".join(stats_lines))
 

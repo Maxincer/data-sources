@@ -349,6 +349,62 @@ class Verifier:
         return result
 
     # -----------------------------------------------------------------
+    # Abnormal null detail records
+    # -----------------------------------------------------------------
+
+    def get_abnormal_nulls(self, target_date: str) -> Dict[str, list]:
+        """
+        获取异常空值明细：字段缺失且 amt≠0 的记录。
+
+        Returns:
+            Dict[exchange] = [{code, open, high, low, close, amt, ...}] 按 amt 降序
+        """
+        conn = self._get_conn()
+        try:
+            with conn.cursor() as cur:
+                dt = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:8]}"
+                cur.execute(f"""
+                    SELECT DISTINCT SUBSTRING_INDEX(code, '.', -1) AS ex
+                    FROM future_cn.t_futures_info_exchange
+                    WHERE date = '{dt}'
+                    ORDER BY ex
+                """)
+                exchanges = [r["ex"] for r in cur.fetchall()]
+
+                fields = ["open","high","low","close","volume","amt","oi",
+                           "settle","maxup","maxdown","long_margin","short_margin"]
+                result = {}
+                for ex in exchanges:
+                    if ex == "CSI":
+                        continue
+                    # Find records where ANY field is null but amt is non-zero
+                    null_conditions = " OR ".join(
+                        f"{f} IS NULL" for f in fields
+                    )
+                    col_list = ", ".join(fields)
+                    sql = f"""
+                        SELECT {col_list}
+                        FROM future_cn.t_futures_info_exchange
+                        WHERE date = '{dt}'
+                          AND SUBSTRING_INDEX(code, '.', -1) = '{ex}'
+                          AND ({null_conditions})
+                          AND (amt IS NOT NULL AND amt != 0)
+                        ORDER BY amt DESC
+                        LIMIT 10
+                    """
+                    cur.execute(sql)
+                    rows = cur.fetchall()
+                    if not rows:
+                        continue
+                    result[ex] = []
+                    for row in rows:
+                        rec = dict(row)
+                        result[ex].append(rec)
+        finally:
+            conn.close()
+        return result
+
+    # -----------------------------------------------------------------
     # Comprehensive cross-table comparison
     # -----------------------------------------------------------------
 
