@@ -420,10 +420,29 @@ class Verifier:
                                     old_null.add(f)
                         rec["_old_null"] = old_null
                         rec["_null_fields"] = null_fields
+                        rec["_classification"] = self._classify_abnormal_null(
+                            rec, old_null
+                        )
                         result[ex].append(rec)
         finally:
             conn.close()
         return result
+
+    @staticmethod
+    def _classify_abnormal_null(rec: dict, old_null: set = None) -> str:
+        """
+        判断异常空值是否为可允许异常（无旧表时的启发式规则）。
+
+        规则：
+        - OHLC 全部为空、close 有值、volume < 5 → 远月冷门合约 API 限制
+        - 其余情况 → 需核查
+        """
+        nulls = [f for f in ("open", "high", "low") if rec.get(f) is None]
+        if len(nulls) == 3 and rec.get("close") is not None:
+            vol = rec.get("volume") or 0
+            if vol < 5:
+                return "✅ 可允许: 远月冷合API无OHLC"
+        return "⚠️ 需核查"
 
     # -----------------------------------------------------------------
     # Comprehensive cross-table comparison
