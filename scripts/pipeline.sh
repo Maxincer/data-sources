@@ -8,6 +8,17 @@ TRADE_DATE="${1:-$(date +%Y%m%d)}"
 LOG_FILE="${HOME}/logs/cron.log"
 SCRIPT_NAME="pipeline.sh"
 
+# 判定是否为交易日
+TRADE_DATES_FILE="data/trade_dates.txt"
+if [ -f "${TRADE_DATES_FILE}" ]; then
+    if ! grep -qx "${TRADE_DATE}" "${TRADE_DATES_FILE}" 2>/dev/null; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${TRADE_DATE} 非交易日，跳过 pipeline" >> "${LOG_FILE}"
+        exit 0
+    fi
+else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ⚠ ${TRADE_DATES_FILE} 不存在，强制运行" >> "${LOG_FILE}"
+fi
+
 # SMTP 密码（企业微信邮箱 mxz@wendao.fund）
 SMTP_PASSWORD="reSZ2qAaKiAgyu5Q"
 export SMTP_PASSWORD

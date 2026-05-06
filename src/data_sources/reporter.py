@@ -195,6 +195,20 @@ def generate_daily_report(date_str: str):
                 f"{ec['missing_in_new']} | {ec['extra_in_new']} |"
             )
 
+        # 缺漏/多余明细（最多10条）
+        missing_records = comp.get("missing_records", [])
+        extra_records = comp.get("extra_records", [])
+        if missing_records:
+            comp_lines.append("")
+            comp_lines.append(f"缺漏明细 (原表有/新表无, 最多10条):")
+            for rec in missing_records[:10]:
+                comp_lines.append(f"  ❌ {rec['code']} @ {rec['date']}")
+        if extra_records:
+            comp_lines.append("")
+            comp_lines.append(f"多余明细 (新表有/原表无, 最多10条):")
+            for rec in extra_records[:10]:
+                comp_lines.append(f"  ➕ {rec['code']} @ {rec['date']}")
+
         has_field_diff = False
         for ex in sorted(comp.get("field_diffs", {}).keys()):
             if ex == "CSI":
