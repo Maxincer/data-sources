@@ -195,19 +195,20 @@ def generate_daily_report(date_str: str):
                 f"{ec['missing_in_new']} | {ec['extra_in_new']} |"
             )
 
-        # 缺漏/多余明细（最多10条）
+        # 缺漏/多余明细
         missing_records = comp.get("missing_records", [])
         extra_records = comp.get("extra_records", [])
         if missing_records:
             comp_lines.append("")
-            comp_lines.append(f"缺漏明细 (原表有/新表无, 最多10条):")
-            for rec in missing_records[:10]:
+            comp_lines.append(f"缺漏明细 (原表有/新表无):")
+            for rec in missing_records:
                 comp_lines.append(f"  ❌ {rec['code']} @ {rec['date']}")
         if extra_records:
             comp_lines.append("")
-            comp_lines.append(f"多余明细 (新表有/原表无, 最多10条):")
-            for rec in extra_records[:10]:
+            comp_lines.append(f"多余明细 (新表有/原表无):")
+            for rec in extra_records:
                 comp_lines.append(f"  ➕ {rec['code']} @ {rec['date']}")
+        comp_lines.append("")
 
         has_field_diff = False
         for ex in sorted(comp.get("field_diffs", {}).keys()):
@@ -311,6 +312,24 @@ def send_email_report(date_str: str, recipients: list[str] = None):
             f'<td style="text-align:center;color:{"red" if c["missing_in_new"]>0 else "green"}">{c["missing_in_new"]}</td>'
             f'<td style="text-align:center">{c["extra_in_new"]}</td></tr>')
     html_parts.append('</table>')
+
+    # 缺漏/多余明细
+    missing_records = comp.get("missing_records", [])
+    extra_records = comp.get("extra_records", [])
+    if missing_records:
+        html_parts.append('<h3>⚠️ 缺漏明细 (原表有/新表无)</h3>')
+        html_parts.append('<table border="1" cellpadding="6" cellspacing="0" style="border-collapse: collapse;">')
+        html_parts.append('<tr style="background:#f5f5f5;"><th>合约</th><th>日期</th></tr>')
+        for rec in missing_records:
+            html_parts.append(f'<tr><td>{rec["code"]}</td><td>{rec["date"]}</td></tr>')
+        html_parts.append('</table>')
+    if extra_records:
+        html_parts.append('<h3>➕ 多余明细 (新表有/原表无)</h3>')
+        html_parts.append('<table border="1" cellpadding="6" cellspacing="0" style="border-collapse: collapse;">')
+        html_parts.append('<tr style="background:#f5f5f5;"><th>合约</th><th>日期</th></tr>')
+        for rec in extra_records:
+            html_parts.append(f'<tr><td>{rec["code"]}</td><td>{rec["date"]}</td></tr>')
+        html_parts.append('</table>')
 
     # 字段覆盖率
     html_parts.append('<h2>📈 字段覆盖率统计</h2>')
