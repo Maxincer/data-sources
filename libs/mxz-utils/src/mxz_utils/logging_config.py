@@ -104,6 +104,40 @@ class AlertLogger(logging.Logger):
         else:
             self.warning('Alert mechanism not configured, alert msg: %s', msg)
 
+    def feishu_card(self, title: str, elements: list):
+        """
+        Send a Feishu interactive card via bot webhook.
+
+        Args:
+            title: Card header title.
+            elements: List of card element dicts (markdown, hr, etc.).
+        """
+        if not self.alertbot_url:
+            self.warning('feishu_card: alert URL not configured, card not sent')
+            return
+        card = {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": title},
+                "template": "blue",
+            },
+            "elements": elements,
+        }
+        payload = {"msg_type": "interactive", "card": card}
+        try:
+            resp = requests.post(
+                url=self.alertbot_url,
+                json=payload,
+                timeout=5.0
+            )
+            if resp.status_code != 200:
+                self.error(
+                    'feishu_card send failed: %s %s',
+                    resp.status_code, resp.text[:200]
+                )
+        except Exception as e:
+            self.error('feishu_card exception: %s', e)
+
 
 class HybridRotatingFileHandler(RotatingFileHandler):
     def __init__(
