@@ -1,25 +1,16 @@
 #!/usr/bin/env bash
 # Data pipeline: fetch → parse/write → report → email
 # Runs via crontab at 16:30 every trading day
-# SMTP_PASSWORD must be set in environment for email delivery
 
 cd /mnt/e/projects/data-sources || exit 1
-
-# 确保 SMTP_PASSWORD 可用
-if [ -z "${SMTP_PASSWORD}" ] && [ -f "${HOME}/.bashrc" ]; then
-    source "${HOME}/.bashrc" 2>/dev/null
-    export SMTP_PASSWORD
-fi
-
-# 若仍为空，从 bashrc 中直接提取
-if [ -z "${SMTP_PASSWORD}" ]; then
-    SMTP_PASSWORD=$(grep '^export SMTP_PASSWORD=' "${HOME}/.bashrc" 2>/dev/null | head -1 | cut -d'=' -f2- | tr -d '"')
-    export SMTP_PASSWORD
-fi
 
 TRADE_DATE="${1:-$(date +%Y%m%d)}"
 LOG_FILE="${HOME}/logs/cron.log"
 SCRIPT_NAME="pipeline.sh"
+
+# SMTP 密码（企业微信邮箱 mxz@wendao.fund）
+SMTP_PASSWORD="reSZ2qAaKiAgyu5Q"
+export SMTP_PASSWORD
 
 {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] ===== ${SCRIPT_NAME} started for ${TRADE_DATE} ====="
