@@ -159,18 +159,25 @@ def generate_daily_report(date_str: str):
         if ex in abnormal and abnormal[ex]:
             stats_lines.append("")
             stats_lines.append("异常空值明细 (按金额降序, 最多10条):")
-            stats_lines.append("| 合约 | open | high | low | close | volume | amt | oi |")
-            stats_lines.append("| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+            stats_lines.append("| 合约 | 空值字段 | amt | 旧表比对 |")
+            stats_lines.append("| :--- | :--- | ---: | :--- |")
             for rec in abnormal[ex]:
-                def fmt(v): return f"{v:>8.1f}" if v is not None else " — "
-                def fmt_i(v): return f"{v:>8,.0f}" if v is not None else " — "
                 code = rec.get("code", "")
                 parts = code.split(".")[0] if code else "?"
-                stats_lines.append(
-                    f"| {parts} | {fmt(rec.get('open'))} | {fmt(rec.get('high'))} | "
-                    f"{fmt(rec.get('low'))} | {fmt(rec.get('close'))} | "
-                    f"{fmt_i(rec.get('volume'))} | {fmt_i(rec.get('amt'))} | {fmt_i(rec.get('oi'))} |"
-                )
+                nulls = rec.get("_null_fields", [])
+                old_nulls = rec.get("_old_null", set())
+                tags = []
+                for f in nulls:
+                    if f in old_nulls:
+                        tags.append(f"{f}(旧表同)")
+                    else:
+                        tags.append(f"**{f}**(仅新表)")
+                null_str = ", ".join(tags)
+                amt = rec.get("amt")
+                amt_str = f"{amt:>,.0f}" if amt else "—"
+                all_expected = all(f in old_nulls for f in nulls)
+                status = "✅ 可允许" if all_expected else "⚠️ 需核查"
+                stats_lines.append(f"| {parts} | {null_str} | {amt_str} | {status} |")
 
         stats_lines.append("")
     sections.append("\n".join(stats_lines))

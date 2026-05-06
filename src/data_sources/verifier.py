@@ -381,7 +381,7 @@ class Verifier:
                     null_conditions = " OR ".join(
                         f"{f} IS NULL" for f in fields
                     )
-                    col_list = ", ".join(fields)
+                    col_list = "code, " + ", ".join(fields)
                     sql = f"""
                         SELECT {col_list}
                         FROM future_cn.t_futures_info_exchange
@@ -399,6 +399,27 @@ class Verifier:
                     result[ex] = []
                     for row in rows:
                         rec = dict(row)
+                        code = rec["code"]
+                        # 对比旧表：标记哪些字段旧表也 NULL
+                        null_fields = [f for f in fields
+                                       if rec.get(f) is None
+                                       and f != "amt"]
+                        if not null_fields:
+                            continue
+                        # 查旧表同条数据
+                        cur.execute(f"""
+                            SELECT {', '.join(null_fields)}
+                            FROM future_cn.t_futures_info
+                            WHERE code = '{code}' AND date = '{dt}'
+                        """)
+                        old_row = cur.fetchone()
+                        old_null = set()
+                        if old_row:
+                            for f in null_fields:
+                                if old_row.get(f) is None:
+                                    old_null.add(f)
+                        rec["_old_null"] = old_null
+                        rec["_null_fields"] = null_fields
                         result[ex].append(rec)
         finally:
             conn.close()
