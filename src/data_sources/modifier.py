@@ -338,6 +338,49 @@ def fix_gfe_margin(records: list) -> list:
 
 
 # ===================================================================
+# 7b. GFE 涨跌停价继承：开盘限价口径
+# ===================================================================
+
+
+def fix_gfe_limit_prices(records: list) -> list:
+    """修正 GFE 合约的涨跌停价，使用开盘限价口径。
+
+    GFE 交易参数 API 永远返回最新快照，不支持按日期查询历史数据。
+    节假日调整后的涨跌停价不应在节后使用，需继承前一交易日的数据。
+
+    逻辑：按合约分组、按日期排序，date T 的 maxup/maxdown =
+          date T-1 的原始值。
+    """
+    from collections import defaultdict
+
+    gfe_records = [
+        r for r in records
+        if r.get("code", "").endswith(".GFE")
+        and r.get("maxup") is not None
+    ]
+    by_code: Dict[str, list] = defaultdict(list)
+    for rec in gfe_records:
+        by_code[rec["code"]].append(rec)
+
+    for code, recs in by_code.items():
+        recs.sort(key=lambda r: r.get("date", ""))
+        prev_maxup = None
+        prev_maxdown = None
+        for rec in recs:
+            cur_maxup = rec.get("maxup")
+            cur_maxdown = rec.get("maxdown")
+            if prev_maxup is not None and prev_maxdown is not None:
+                rec["maxup"] = prev_maxup
+                rec["maxdown"] = prev_maxdown
+            if cur_maxup is not None:
+                prev_maxup = cur_maxup
+            if cur_maxdown is not None:
+                prev_maxdown = cur_maxdown
+
+    return records
+
+
+# ===================================================================
 # 8. 通用保证金率继承修正
 # ===================================================================
 
