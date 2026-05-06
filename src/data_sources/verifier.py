@@ -45,7 +45,7 @@ class CompareResult:
     def summary(self) -> Dict:
         # 按偏差降序排列
         sorted_samples = sorted(self.sample_diffs,
-                                key=*** x: x.get("deviation_pct", 0),
+                                key=lambda x: x.get("deviation_pct", 0),
                                 reverse=True)
         return {
             "field": self.field,
@@ -65,6 +65,16 @@ class Verifier:
     """
 
     CFFEX_ERROR_SIGNATURE = b"\xcd\xf8\xd2\xb3\xb4\xed\xce\xf3"
+
+    PRICE_COLS = ("open", "high", "low", "close")
+
+    @staticmethod
+    def normalize_ohlc(rec: dict) -> dict:
+        """OHLC 价格 0 → None（无成交日）。"""
+        for col in Verifier.PRICE_COLS:
+            if rec.get(col) == 0.0:
+                rec[col] = None
+        return rec
 
     def __init__(self, logger, metadata_file=None):
         self.logger = logger
