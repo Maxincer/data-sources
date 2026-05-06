@@ -206,6 +206,32 @@ def _normalize(d) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Compatibility aliases (used by writer.py and other modules)
+# ---------------------------------------------------------------------------
+
+
+def nearest_trading_day(d: date) -> date | None:
+    """获取给定日期最近的交易日（date → date），兼容旧版接口。"""
+    s = nearest(d)
+    if s is None:
+        return None
+    return datetime.strptime(s, "%Y%m%d").date()
+
+
+def yyyymmdd(d: date) -> str:
+    """date → YYYYMMDD 字符串。"""
+    return d.strftime("%Y%m%d")
+
+
+def to_date(s: str) -> date | None:
+    """YYYYMMDD 字符串 → date。"""
+    try:
+        return datetime.strptime(s, "%Y%m%d").date()
+    except (ValueError, TypeError):
+        return None
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 

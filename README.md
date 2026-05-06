@@ -274,3 +274,40 @@ n = nearest(20260506)           # 用新数据查询
 ```
 
 CLI：`python trade_date.py nearest|prev|is_trading <YYYYMMDD>|--update`
+
+### 兼容别名
+
+`writer.py` 引用旧版函数名，`trade_date.py` 提供别名保证兼容：
+
+| 函数 | 等价调用 |
+|------|----------|
+| `nearest_trading_day(d: date) -> date` | 同 `nearest(d)`，返回 date 对象 |
+| `yyyymmdd(d: date) -> str` | date → `"YYYYMMDD"` |
+| `to_date(s: str) -> date` | `"YYYYMMDD"` → date |
+
+
+## CFFEX 结算参数表（不定时发布）
+
+### 背景
+
+CFFEX（中金所）有三种文件：
+
+| 文件 | 发布频率 |
+|------|----------|
+| `DailyMarketData`（日行情） | **每日**发布，每个交易日都有 |
+| `SettlementParameters`（结算参数表） | **不定时**，仅在结算参数变化时发布 |
+| `TradingParameters`（交易参数表） | **不定时** |
+
+### 无发布日的处理
+
+Fetcher 每天仍会尝试下载。CFFEX 当天未发布时服务器返回 HTML 错误页，Fetcher 识别后标记 `no_data` 不报错：
+
+```python
+# fetcher.py _fetch_cffex_settlement
+if "HTML error page" in reason:
+    return {"success": True, "no_data": True}
+```
+
+Writer 扫描原始目录时未找到该日对应文件，则该日不产生该类型数据的 DB 记录。
+
+**结果：** DB 中 CFFEX 结算/交易参数的条目在该日不存在。这是预期行为——不定时发布的文件仅在参数变动日有记录，其他日期数据量自然少于每日发布的交易所。
