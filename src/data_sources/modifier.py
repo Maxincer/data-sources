@@ -532,15 +532,20 @@ def calc_shfe_ine_limit_prices(pre_settle: float, limit_pct_up: float,
 # ===================================================================
 
 
+
 def forward_fill_settlement(records: list) -> list:
     """
-    交易所不定时发布结算参数时，未发布日 settle/maxup/maxdown 为 NULL。
+    交易所不定时发布结算参数时，未发布日相关字段为 NULL。
     按合约分组、按日期排序，用上次非 NULL 值前向填充。
 
+    覆盖字段：settle, maxup, maxdown, long_margin, short_margin
+
     适用场景：CFFEX SettlementParameters 不定时发布；
-             其他交易所的结算参数空窗期。
+             其他交易所结算参数空窗期。
     """
     from collections import defaultdict
+
+    FILL_FIELDS = ["settle", "maxup", "maxdown", "long_margin", "short_margin"]
 
     by_code: dict[str, list[dict]] = defaultdict(list)
     for rec in records:
@@ -548,24 +553,14 @@ def forward_fill_settlement(records: list) -> list:
 
     for _code, recs in by_code.items():
         recs.sort(key=lambda r: r.get("date", ""))
-        last_settle = None
-        last_maxup = None
-        last_maxdown = None
+        last_vals = {f: None for f in FILL_FIELDS}
 
         for rec in recs:
-            if rec.get("settle") is not None:
-                last_settle = rec["settle"]
-            elif last_settle is not None:
-                rec["settle"] = last_settle
-
-            if rec.get("maxup") is not None:
-                last_maxup = rec["maxup"]
-            elif last_maxup is not None:
-                rec["maxup"] = last_maxup
-
-            if rec.get("maxdown") is not None:
-                last_maxdown = rec["maxdown"]
-            elif last_maxdown is not None:
-                rec["maxdown"] = last_maxdown
+            for f in FILL_FIELDS:
+                val = rec.get(f)
+                if val is not None:
+                    last_vals[f] = val
+                elif last_vals[f] is not None:
+                    rec[f] = last_vals[f]
 
     return records
