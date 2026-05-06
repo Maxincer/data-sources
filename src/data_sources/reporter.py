@@ -237,6 +237,151 @@ def generate_daily_report(date_str: str):
     print(f"Report for {date_str} sent.")
 
 
+def send_email_report(date_str: str, recipients: list[str] = None):
+    """
+    通过企业微信邮箱发送数据验证报告。
+
+    SMTP_PASSWORD 从环境变量读取，否则跳过发送。
+    """
+    import os
+    import smtplib
+    import ssl
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+
+    password = os.environ.get("SMTP_PASSWORD")
+    if not password:
+        print("⚠️ SMTP_PASSWORD 未设置，跳过邮件发送")
+        return
+
+    if recipients is None:
+        recipients = ["wanghaibo@wendao.fund", "chendingzhong@wendao.fund"]
+
+    from data_sources.verifier import Verifier
+
+    sender = "mxz@wendao.fund"
+
+    class _FakeLogger:
+        def info(self, *a, **kw): pass
+        def warning(self, *a, **kw): pass
+        def error(self, *a, **kw): pass
+
+    v = Verifier(_FakeLogger())
+
+    # 生成报告内容
+    comp = v.compare_all(target_date=date_str)
+    ec = comp.get("exchange_counts", {})
+    fd = comp.get("field_diffs", {})
+    stats = v.get_field_stats(date_str)
+    abnormal = v.get_abnormal_nulls(date_str)
+
+    FIELDS = ["open","high","low","close","volume","amt","oi",
+               "settle","maxup","maxdown","long_margin","short_margin"]
+
+    html_parts = []
+    html_parts.append(f"""
+<html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #333; max-width: 900px; margin: 0 auto; padding: 20px;">
+<h1 style="color: #1a73e8; border-bottom: 2px solid #1a73e8; padding-bottom: 10px;">📊 数据验证报告 {date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}</h1>
+""")
+
+    # 合约覆盖率
+    html_parts.append('<h2>📋 合约覆盖率</h2>')
+    html_parts.append('<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%;">')
+    html_parts.append('<tr style="background: #f5f5f5;"><th>交易所</th><th>原表</th><th>新表</th><th>缺漏</th><th>多余</th></tr>')
+    for ex in sorted(ec.keys()):
+        if ex == "CSI": continue
+        c = ec[ex]
+        html_parts.append(
+            f'<tr><td><b>{ex}</b></td><td style="text-align:center">{c["original"]}</td>'
+            f'<td style="text-align:center">{c["new"]}</td>'
+            f'<td style="text-align:center;color:{"red" if c["missing_in_new"]>0 else "green"}">{c["missing_in_new"]}</td>'
+            f'<td style="text-align:center">{c["extra_in_new"]}</td></tr>')
+    html_parts.append('</table>')
+
+    # 字段覆盖率
+    html_parts.append('<h2>📈 字段覆盖率统计</h2>')
+    for ex in sorted(stats.keys()):
+        if ex == "CSI": continue
+        total = (stats[ex].get("code", {}) or {}).get("total", 0) or 0
+        html_parts.append(f'<h3>{ex} ({total} 个合约)</h3>')
+        html_parts.append('<table border="1" cellpadding="6" cellspacing="0" style="border-collapse: collapse; width: 100%;">')
+        html_parts.append('<tr style="background:#f5f5f5;"><th>字段</th><th>非空</th><th>缺失率</th><th>异常空值</th></tr>')
+        for f in FIELDS:
+            s = stats[ex].get(f, {}) or {}
+            nn = s.get("non_null",0) or 0
+            to = s.get("total",0) or 0
+            pct = s.get("null_pct",0) or 0
+            abn = s.get("abnormal_null",0) or 0
+            icon = "✅" if pct==0 else ("⚠️" if pct<10 else "❌")
+            html_parts.append(f'<tr><td>{icon} {f}</td><td style="text-align:center">{nn}/{to}</td>'
+                              f'<td style="text-align:center">{pct}%</td>'
+                              f'<td style="text-align:center">{abn}</td></tr>')
+        html_parts.append('</table>')
+
+        # 异常空值明细
+        if ex in abnormal and abnormal[ex]:
+            html_parts.append('<p><b>异常空值明细:</b></p>')
+            html_parts.append('<table border="1" cellpadding="4" cellspacing="0" style="border-collapse: collapse; font-size: 13px;">')
+            html_parts.append('<tr style="background:#f5f5f5;"><th>合约</th><th>空值字段</th><th>amt</th><th>判定</th></tr>')
+            for rec in abnormal[ex]:
+                code = (rec.get("code","") or "").split(".")[0] or "?"
+                nulls = rec.get("_null_fields",[]) or []
+                classification = rec.get("_classification","") or ""
+                amt = rec.get("amt")
+                amt_str = f"{amt:>,.0f}" if amt else "—"
+                html_parts.append(f'<tr><td>{code}</td><td>{", ".join(nulls)}</td>'
+                                  f'<td style="text-align:right">{amt_str}</td>'
+                                  f'<td>{classification}</td></tr>')
+            html_parts.append('</table>')
+
+    # 字段差异
+    html_parts.append('<h2>🔍 字段差异明细</h2>')
+    has_diff = False
+    for ex in sorted(fd.keys()):
+        if ex == "CSI": continue
+        ex_d = fd[ex]
+        rows = []
+        for f in FIELDS:
+            s = ex_d.get(f, {}) or {}
+            if s.get("diff",0)==0 and s.get("missing_in_original",0)==0 and s.get("missing_in_new",0)==0:
+                continue
+            has_diff = True
+            meta = f"diff={s['diff']}"
+            if s.get("missing_in_original"): meta += f" 旧缺{s['missing_in_original']}"
+            if s.get("missing_in_new"): meta += f" 新缺{s['missing_in_new']}"
+            if s.get("max_deviation_pct",0) > 0.001: meta += f" max={s['max_deviation_pct']}%"
+            samples = []
+            for sd in s.get("sample_diffs",[])[:3]:
+                samples.append(f"{sd['code']}: 旧={sd['original']} 新={sd['new']}")
+            rows.append((f, meta, samples))
+        if not rows: continue
+        html_parts.append(f'<h3>{ex}</h3>')
+        html_parts.append('<table border="1" cellpadding="6" cellspacing="0" style="border-collapse: collapse;">')
+        html_parts.append('<tr style="background:#f5f5f5;"><th>字段</th><th>差异</th><th>示例</th></tr>')
+        for fname, meta, samples in rows:
+            sample_text = "<br>".join(samples) if samples else "—"
+            html_parts.append(f'<tr><td><b>{fname}</b></td><td>{meta}</td><td style="font-size:12px;color:#666">{sample_text}</td></tr>')
+        html_parts.append('</table>')
+    if not has_diff:
+        html_parts.append('<p>✅ 全部字段无差异</p>')
+
+    from datetime import datetime
+    html_parts.append(f'<p style="color:#999;font-size:12px;margin-top:30px;">报告生成: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>')
+    html_parts.append('</body></html>')
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"📊 期货数据验证报告 {date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+    msg["From"] = sender
+    msg["To"] = ", ".join(recipients)
+    msg.attach(MIMEText("\n".join(html_parts), "html", "utf-8"))
+
+    ctx = ssl.create_default_context()
+    with smtplib.SMTP_SSL("smtp.exmail.qq.com", 465, context=ctx) as server:
+        server.login(sender, password)
+        server.sendmail(sender, recipients, msg.as_string())
+    print(f"✅ 邮件报告已发送至: {', '.join(recipients)}")
+
+
 if __name__ == "__main__":
     import sys
     date_str = sys.argv[1] if len(sys.argv) > 1 else \
