@@ -195,7 +195,9 @@ def generate_daily_report(date_str: str):
                     meta += f" 缺异{s['abnormal_missing_new']}"
                 if s["max_deviation_pct"] > 0.001: meta += f" 最大{s['max_deviation_pct']}%"
                 comp_lines.append(f"  {meta}")
-                for sd in s["sample_diffs"][:2]:
+                # 差异<10条全列, ≥10条列前10
+                limit = None if s["diff"] < 10 else 10
+                for sd in s["sample_diffs"][:limit]:
                     comp_lines.append(f"    {sd['code']}: 原={sd['original']} 新={sd['new']}")
 
         if not has_field_diff:

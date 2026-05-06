@@ -43,6 +43,10 @@ class CompareResult:
 
     @property
     def summary(self) -> Dict:
+        # 按偏差降序排列
+        sorted_samples = sorted(self.sample_diffs,
+                                key=*** x: x.get("deviation_pct", 0),
+                                reverse=True)
         return {
             "field": self.field,
             "matched": self.total_matched,
@@ -51,7 +55,7 @@ class CompareResult:
             "missing_in_new": self.total_missing_new,
             "abnormal_missing_new": self.total_abnormal_missing_new,
             "max_deviation_pct": round(self.max_deviation, 4),
-            "sample_diffs": self.sample_diffs[:5],
+            "sample_diffs": sorted_samples[:10],
         }
 
 
@@ -276,7 +280,7 @@ class Verifier:
                 if deviation > tolerance:
                     cr.total_diff += 1
                     cr.max_deviation = max(cr.max_deviation, deviation)
-                    if len(cr.sample_diffs) < 5:
+                    if len(cr.sample_diffs) < 10:
                         cr.sample_diffs.append({
                             "code": code,
                             "date": date,
@@ -561,7 +565,7 @@ class Verifier:
                             if deviation > tolerance:
                                 cr.total_diff += 1
                                 cr.max_deviation = max(cr.max_deviation, deviation)
-                                if len(cr.sample_diffs) < 5:
+                                if len(cr.sample_diffs) < 10:
                                     cr.sample_diffs.append({
                                         "code": code,
                                         "date": date,
@@ -687,7 +691,8 @@ class Verifier:
                     f"{s.get('abnormal_missing_new', 0):>5d} | "
                     f"{s['max_deviation_pct']:>7.2f}%"
                 )
-                for sd in s["sample_diffs"][:3]:
+                limit = None if s["diff"] < 10 else 10
+                for sd in s["sample_diffs"][:limit]:
                     lines.append(
                         f"      → {sd['code']}: "
                         f"原表={sd['original']} 新表={sd['new']} "
