@@ -37,6 +37,7 @@ class CompareResult:
         self.total_diff = 0
         self.total_missing_original = 0
         self.total_missing_new = 0
+        self.total_abnormal_missing_new = 0
         self.max_deviation = 0.0
         self.sample_diffs: List[Dict] = []
 
@@ -48,6 +49,7 @@ class CompareResult:
             "diff": self.total_diff,
             "missing_in_original": self.total_missing_original,
             "missing_in_new": self.total_missing_new,
+            "abnormal_missing_new": self.total_abnormal_missing_new,
             "max_deviation_pct": round(self.max_deviation, 4),
             "sample_diffs": self.sample_diffs[:5],
         }
@@ -538,6 +540,10 @@ class Verifier:
                                 continue
                             if ov is not None and nv is None:
                                 cr.total_missing_new += 1
+                                # 异常缺失：同一条的 amt(旧表) 不为 0 或 amt 本身缺失
+                                oa = row.get("o_amt")
+                                if field == "amt" or oa is None or float(oa) != 0:
+                                    cr.total_abnormal_missing_new += 1
                                 continue
 
                             ov = float(ov)
@@ -654,7 +660,7 @@ class Verifier:
             lines.append(f"  ── {ex} ──")
 
             # Header row
-            header = f"  {'字段':<14s} | {'匹配':>6s} | {'差异':>4s} | {'原表缺':>5s} | {'新表缺':>5s} | {'最大偏差':>8s}"
+            header = f"  {'字段':<14s} | {'匹配':>6s} | {'差异':>4s} | {'原表缺':>5s} | {'新表缺':>5s} | {'缺异':>5s} | {'最大偏差':>8s}"
             lines.append(header)
             lines.append(f"  {'-' * len(header)}")
 
@@ -672,6 +678,7 @@ class Verifier:
                 lines.append(
                     f"  {icon} {field:<12s} | {s['matched']:>6d} | {s['diff']:>4d} | "
                     f"{s['missing_in_original']:>5d} | {s['missing_in_new']:>5d} | "
+                    f"{s.get('abnormal_missing_new', 0):>5d} | "
                     f"{s['max_deviation_pct']:>7.2f}%"
                 )
                 for sd in s["sample_diffs"][:3]:

@@ -190,6 +190,8 @@ def generate_daily_report(date_str: str):
                 meta = f"{ex} {field}: 差{s['diff']}"
                 if s["missing_in_original"]: meta += f" 旧缺{s['missing_in_original']}"
                 if s["missing_in_new"]:     meta += f" 新缺{s['missing_in_new']}"
+                if s.get("abnormal_missing_new", 0):
+                    meta += f" 缺异{s['abnormal_missing_new']}"
                 if s["max_deviation_pct"] > 0.001: meta += f" 最大{s['max_deviation_pct']}%"
                 comp_lines.append(f"  {meta}")
                 for sd in s["sample_diffs"][:2]:
