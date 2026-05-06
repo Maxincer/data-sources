@@ -107,6 +107,23 @@ DCE 的纯苯（BZ）、焦炭（J）等品种的远月合约，API 仅返回主
 
 新旧表均表现为 NULL，该异常长期存在且可预期。
 
+### INE TAS 合约字段缺失
+
+SC（原油期货）的 TAS（结算价交易）合约由 INE DailyMarketData 生成记录，
+但 TradingParameters 和 SettlementParameters 中不包含 TAS 合约的风控参数。
+
+新表中已对 TAS 合约做入库前过滤（`should_filter_contract()`），TAS 合约不入库。
+作为参考，TAS 合约缺失的字段包括：
+
+| 字段 | 说明 |
+|------|------|
+| `oi` | 持仓量（TAS 无持仓数据） |
+| `maxup` / `maxdown` | 涨跌停价（TAS 无此设定） |
+| `long_margin` / `short_margin` | 保证金率（TAS 无此设定） |
+| `volume` / `amt` | 成交量和金额（TAS 在日行情中另有统计） |
+
+以上缺失属于 API 数据源的自然限制，非 pipeline 处理问题。
+
 ### 期货合约覆盖率
 
 | 交易所 | 原表合约数 | 新表合约数 | 差异说明 |
