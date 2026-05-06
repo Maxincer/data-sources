@@ -196,18 +196,20 @@ def generate_daily_report(date_str: str):
             )
 
         # 缺漏/多余明细
+        original_table = "t_futures_info"
+        new_table = "t_futures_info_exchange"
         missing_records = comp.get("missing_records", [])
         extra_records = comp.get("extra_records", [])
         if missing_records:
             comp_lines.append("")
-            comp_lines.append(f"缺漏明细 (原表有/新表无):")
-            for rec in missing_records:
-                comp_lines.append(f"  ❌ {rec['code']} @ {rec['date']}")
+            comp_lines.append(f"缺漏明细 (原表有/新表无, 最多10条):")
+            for rec in _fetch_records_details(missing_records[:10], original_table, date_str):
+                comp_lines.append(f"  ❌ {_fmt_rec_line(rec)}")
         if extra_records:
             comp_lines.append("")
-            comp_lines.append(f"多余明细 (新表有/原表无):")
-            for rec in extra_records:
-                comp_lines.append(f"  ➕ {rec['code']} @ {rec['date']}")
+            comp_lines.append(f"多余明细 (新表有/原表无, 最多10条):")
+            for rec in _fetch_records_details(extra_records[:10], new_table, date_str):
+                comp_lines.append(f"  ➕ {_fmt_rec_line(rec)}")
         comp_lines.append("")
 
         has_field_diff = False
@@ -250,6 +252,56 @@ def generate_daily_report(date_str: str):
     full_report = "\n\n---\n\n".join(sections)
     _send_feishu_markdown(f"📊 数据验证报告 {date_str}", full_report)
     print(f"Report for {date_str} sent.")
+
+
+# 查询辅助字段用于缺漏/多余明细
+_FULL_FIELDS = ["open","high","low","close","volume","amt","oi",
+                "settle","maxup","maxdown","long_margin","short_margin"]
+
+
+def _fetch_records_details(records: list, table: str, date_str: str) -> list:
+    """查询记录的所有字段值。"""
+    import pymysql
+    from data_sources.verifier import DB_CONFIG
+    conn = pymysql.connect(**DB_CONFIG)
+    try:
+        with conn.cursor() as cur:
+            dt = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+            cols = ", ".join(["code"] + _FULL_FIELDS)
+            results = []
+            for rec in records:
+                code = rec["code"]
+                cur.execute(f"""
+                    SELECT {cols} FROM future_cn.{table}
+                    WHERE code = %s AND date = %s
+                """, (code, dt))
+                row = cur.fetchone()
+                if row:
+                    results.append(dict(row))
+            return results
+    finally:
+        conn.close()
+
+
+def _fmt_rec_line(rec: dict) -> str:
+    """格式化一条记录的所有字段为一行（用于飞书 Markdown）。"""
+    def v(f):
+        val = rec.get(f)
+        if val is None:
+            return "—"
+        try:
+            fv = float(val)
+            if f == "amt":
+                return f"{fv:,.0f}"
+            if f in ("volume", "oi"):
+                return f"{int(fv)}"
+            return f"{fv:g}"
+        except:
+            return str(val)
+    parts = [rec.get("code", "?")]
+    for f in _FULL_FIELDS:
+        parts.append(f"{f}={v(f)}")
+    return " | ".join(parts)
 
 
 def send_email_report(date_str: str, recipients: list[str] = None):
@@ -317,18 +369,34 @@ def send_email_report(date_str: str, recipients: list[str] = None):
     missing_records = comp.get("missing_records", [])
     extra_records = comp.get("extra_records", [])
     if missing_records:
-        html_parts.append('<h3>⚠️ 缺漏明细 (原表有/新表无)</h3>')
-        html_parts.append('<table border="1" cellpadding="6" cellspacing="0" style="border-collapse: collapse;">')
-        html_parts.append('<tr style="background:#f5f5f5;"><th>合约</th><th>日期</th></tr>')
-        for rec in missing_records:
-            html_parts.append(f'<tr><td>{rec["code"]}</td><td>{rec["date"]}</td></tr>')
+        html_parts.append('<h3>⚠️ 缺漏明细 (原表有/新表无, 最多10条)</h3>')
+        html_parts.append('<table border="1" cellpadding="4" cellspacing="0" style="border-collapse: collapse; font-size:12px;">')
+        html_parts.append('<tr style="background:#f5f5f5;"><th>合约</th>' + ''.join(f'<th>{f}</th>' for f in _FULL_FIELDS) + '</tr>')
+        for rec in _fetch_records_details(missing_records[:10], "t_futures_info", date_str):
+            def _td(v):
+                if v is None: return '<td style="text-align:center">—</td>'
+                try:
+                    fv = float(v)
+                    if abs(fv) >= 1e6 or f == "amt": return f'<td style="text-align:right">{fv:,.0f}</td>'
+                    if fv == int(fv): return f'<td style="text-align:right">{int(fv)}</td>'
+                    return f'<td style="text-align:right">{fv:g}</td>'
+                except: return f'<td>{v}</td>'
+            html_parts.append('<tr><td>' + rec.get("code","") + '</td>' + ''.join(_td(rec.get(f)) for f in _FULL_FIELDS) + '</tr>')
         html_parts.append('</table>')
     if extra_records:
-        html_parts.append('<h3>➕ 多余明细 (新表有/原表无)</h3>')
-        html_parts.append('<table border="1" cellpadding="6" cellspacing="0" style="border-collapse: collapse;">')
-        html_parts.append('<tr style="background:#f5f5f5;"><th>合约</th><th>日期</th></tr>')
-        for rec in extra_records:
-            html_parts.append(f'<tr><td>{rec["code"]}</td><td>{rec["date"]}</td></tr>')
+        html_parts.append('<h3>➕ 多余明细 (新表有/原表无, 最多10条)</h3>')
+        html_parts.append('<table border="1" cellpadding="4" cellspacing="0" style="border-collapse: collapse; font-size:12px;">')
+        html_parts.append('<tr style="background:#f5f5f5;"><th>合约</th>' + ''.join(f'<th>{f}</th>' for f in _FULL_FIELDS) + '</tr>')
+        for rec in _fetch_records_details(extra_records[:10], "t_futures_info_exchange", date_str):
+            def _td(v):
+                if v is None: return '<td style="text-align:center">—</td>'
+                try:
+                    fv = float(v)
+                    if abs(fv) >= 1e6 or f == "amt": return f'<td style="text-align:right">{fv:,.0f}</td>'
+                    if fv == int(fv): return f'<td style="text-align:right">{int(fv)}</td>'
+                    return f'<td style="text-align:right">{fv:g}</td>'
+                except: return f'<td>{v}</td>'
+            html_parts.append('<tr><td>' + rec.get("code","") + '</td>' + ''.join(_td(rec.get(f)) for f in _FULL_FIELDS) + '</tr>')
         html_parts.append('</table>')
 
     # 字段覆盖率
@@ -384,7 +452,7 @@ def send_email_report(date_str: str, recipients: list[str] = None):
             if s.get("missing_in_new"): meta += f" 新缺{s['missing_in_new']}"
             if s.get("max_deviation_pct",0) > 0.001: meta += f" max={s['max_deviation_pct']}%"
             samples = []
-            for sd in s.get("sample_diffs",[])[:3]:
+            for sd in s.get("sample_diffs",[])[:10]:
                 samples.append(f"{sd['code']}: 旧={sd['original']} 新={sd['new']}")
             rows.append((f, meta, samples))
         if not rows: continue
