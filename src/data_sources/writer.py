@@ -13,9 +13,7 @@ import argparse
 from pathlib import Path
 
 from data_sources.parser import parse_file, ParseStats, merge_by_code_date
-from data_sources.modifier import (should_filter_contract, fill_tas_settle,
-    fix_dce_limit_prices, fix_gfe_margin, fix_all_margin,
-    fill_zero_volume_close, forward_fill_settlement)
+from data_sources.modifier import should_filter_contract, fill_tas_settle, fix_dce_limit_prices, fix_gfe_margin, fix_all_margin, fill_zero_volume_close
 from data_sources.trade_date import prev_trading_date
 from data_sources.db import create_table, upsert_records
 RAW_DIR = Path("./data/raw")
@@ -28,7 +26,6 @@ def _apply_modifiers(records):
     records = fix_all_margin(records)
     records = fill_zero_volume_close(records)
     records = fill_tas_settle(records)
-    records = forward_fill_settlement(records)
     before = len(records)
     records = [r for r in records if not should_filter_contract(r.get("code", ""))]
     filtered = before - len(records)
