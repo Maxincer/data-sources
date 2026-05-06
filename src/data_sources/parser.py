@@ -24,8 +24,8 @@ from data_sources.modifier import (
     safe_floor,
     calc_czce_limit_prices,
     calc_shfe_ine_limit_prices,
+    zero_price_to_none,
 )
-from data_sources.verifier import Verifier
 
 # Exchange product sets for cross-exchange filtering
 SHFE_PRODUCTS = {"CU","AL","ZN","PB","NI","SN","AU","AG","RB","WR",
@@ -938,9 +938,9 @@ def merge_by_code_date(records: List[Dict]) -> List[Dict]:
                         existing[k] = v
         else:
             merged[key] = dict(rec)
-    # OHLC 0 → None（通过 Verifier 做数据清洗）
+    # OHLC 0 → None（通过 Modifier 做数据清洗）
     for rec in merged.values():
-        Verifier.normalize_ohlc(rec)
+        zero_price_to_none(rec)
 
     # Compute maxup/maxdown when both pre_settle and _limit_pct are available
     tick_map: Dict[str, float] = {}
