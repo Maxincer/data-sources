@@ -158,7 +158,7 @@ def generate_daily_report(date_str: str):
     # ---- Section 3: Comparison differences ----
     try:
         comp = v.compare_all(target_date=date_str)
-        comp_lines = ["**合约覆盖率: t_futures_info vs t_futures_info_exchange (个)**", ""]
+        comp_lines = ["**合约覆盖率: t_futures_info vs t_futures_info_exchange (个合约)**", ""]
         comp_lines.append("| 交易所 | 原表 | 新表 | 缺漏 | 多余 |")
         comp_lines.append("| :--- | ---: | ---: | ---: | ---: |")
         for ex, ec in sorted(comp.get("exchange_counts", {}).items()):
