@@ -1038,6 +1038,10 @@ class Fetcher:
         for config in self.task_configs:
             task = Task.from_config(config, trade_date)
 
+            # CFFEX Settlement 已改为同步模式，跳过旧的任务循环
+            if task.exchange == "CFFEX" and task.description == "SettlementParameters":
+                continue
+
             # GFEX 交易参数表 & 日行情不支持按日期查询——仅当请求日期 >= 已有文件最新日期时才下载
             # 结算参数表（SettlementParameters）已用数组格式支持历史查询，不受影响
             if (task.exchange == "GFEX"
