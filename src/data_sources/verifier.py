@@ -420,16 +420,14 @@ class Verifier:
                                     old_null.add(f)
                         rec["_old_null"] = old_null
                         rec["_null_fields"] = null_fields
-                        rec["_classification"] = self._classify_abnormal_null(
-                            rec, old_null
-                        )
+                        rec["_classification"] = self._classify_abnormal_null(rec)
                         result[ex].append(rec)
         finally:
             conn.close()
         return result
 
     @staticmethod
-    def _classify_abnormal_null(rec: dict, old_null: set = None) -> str:
+    def _classify_abnormal_null(rec: dict) -> str:
         """
         判断异常空值是否为可允许异常（无旧表时的启发式规则）。
 

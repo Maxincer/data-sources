@@ -1,52 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Shared data models for the data-sources project."""
+"""Data models for pipeline tasks."""
 
 import re
 from pathlib import Path
-from typing import Callable, Dict, List, NamedTuple, Optional
-
-import requests
-
-
-CFFEX_JSCS_URL = "http://www.cffex.com.cn/cn/jscs.html"
-
-
-def fetch_cffex_jscs_links() -> List[dict]:
-    """
-    Fetch CFFEX settlement params page and extract all <a> links.
-    Returns list of {"url": str, "text": str}.
-    """
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-    }
-    resp = requests.get(CFFEX_JSCS_URL, headers=headers, timeout=15)
-    resp.encoding = "utf-8"
-    html = resp.text
-
-    base = "http://www.cffex.com.cn"
-    links: List[dict] = []
-    pattern = re.compile(
-        r'<a\s[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
-        re.IGNORECASE | re.DOTALL,
-    )
-    for match in pattern.finditer(html):
-        href = match.group(1).strip()
-        raw_text = match.group(2).strip()
-        text = re.sub(r"<[^>]+>", "", raw_text).strip()
-        if not href or href.startswith("#") or href.startswith("javascript"):
-            continue
-        full_url = (
-            href if href.startswith("http")
-            else f"{base}/{href.lstrip('/')}"
-        )
-        links.append({"url": full_url, "text": text or href})
-    return links
+from typing import Callable, Dict, NamedTuple, Optional
 
 
 class TaskConfig(NamedTuple):
@@ -60,6 +19,7 @@ class TaskConfig(NamedTuple):
 
 class Task:
     """Concrete task produced from config and trade date."""
+
     def __init__(  # pylint: disable=too-many-positional-arguments
         self,
         exchange: str,
@@ -122,6 +82,7 @@ class Task:
         Build a CFFEX settlement Task by finding the latest CSV link
         on the live jscs.html page; uses the given trade_date as date.
         """
+        from data_sources.fetcher import fetch_cffex_jscs_links
         links = fetch_cffex_jscs_links()
         # Filter: must contain /sj/jscs/ and end with _1.csv
         csv_links = [
@@ -138,6 +99,7 @@ class Task:
             # URL pattern: .../sj/jscs/YYYYMM/DD/YYYYMMDD_1.csv
             match = re.search(r"/sj/jscs/\d{6}/\d{2}/(\d{8})_1\.csv", url)
             return match.group(1) if match else ""
+
         best = max(csv_links, key=lambda link: _extract_date(link["url"]))
         task = cls(
             exchange=config.exchange,
@@ -148,35 +110,3 @@ class Task:
         )
         task.fetch_func = config.fetch_func
         return task
-
-
-# ---------------------------------------------------------------------------
-# CFFEX Settlement: 同步模式辅助
-# ---------------------------------------------------------------------------
-
-
-def get_cffex_settlement_available(start_date: str = "20260401") -> list[dict]:
-    """
-    获取 CFFEX jscs.html 上所有可用的结算参数表。
-
-    Returns:
-        [{"date": "YYYYMMDD", "url": str}, ...]，按日期降序。
-        仅返回 >= start_date 的条目。
-    """
-    links = fetch_cffex_jscs_links()
-    csv_links = []
-    for link in links:
-        url = link["url"]
-        match = re.search(r"/sj/jscs/\d{6}/\d{2}/(\d{8})_1\.csv", url)
-        if match:
-            d = match.group(1)
-            if d >= start_date:
-                csv_links.append({"date": d, "url": url})
-    seen = set()
-    unique = []
-    for entry in csv_links:
-        if entry["date"] not in seen:
-            seen.add(entry["date"])
-            unique.append(entry)
-    unique.sort(key=lambda x: x["date"], reverse=True)
-    return unique

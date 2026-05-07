@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Env
+.env
+
+# Logs: any directory named logs, any .log file
+logs/
+*.log
+
+# Data: keep only trade_dates.txt
+/data/*
+!/data/trade_dates.txt

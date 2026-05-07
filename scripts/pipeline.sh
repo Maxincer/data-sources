@@ -19,6 +19,13 @@ else
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] ⚠ ${TRADE_DATES_FILE} 不存在，强制运行" >> "${LOG_FILE}"
 fi
 
+# 时间判定：16:27 前不执行（确保数据源已发布）
+CURRENT_HM=$(date '+%H%M')
+if [ "$CURRENT_HM" -lt 1627 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 当前 ${CURRENT_HM} < 1627，跳过 pipeline" >> "${LOG_FILE}"
+    exit 0
+fi
+
 # SMTP 密码（企业微信邮箱 mxz@wendao.fund）
 SMTP_PASSWORD="reSZ2qAaKiAgyu5Q"
 export SMTP_PASSWORD
@@ -27,25 +34,21 @@ export SMTP_PASSWORD
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] ===== ${SCRIPT_NAME} started for ${TRADE_DATE} ====="
     
     # Step 1: Fetch raw data
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Step 1/4: Fetching raw data..."
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Step 1/3: Fetching raw data..."
     PYTHONPATH=src:libs/mxz-utils/src python3 -m data_sources.fetcher run "${TRADE_DATE}" 2>&1 || \
         echo "[WARN] Fetcher completed with some errors"
     
     # Step 2: Parse and write to DB
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Step 2/4: Parsing and writing to database..."
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Step 2/3: Parsing and writing to database..."
     PYTHONPATH=src python3 -m data_sources.writer --date "${TRADE_DATE}" 2>&1 || \
         echo "[WARN] Writer completed with some errors"
     
-    # Step 3: Generate and send Feishu report
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Step 3/4: Generating verification report..."
-    PYTHONPATH=src python3 -m data_sources.reporter "${TRADE_DATE}" 2>&1
-    
-    # Step 4: Send email report
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Step 4/4: Sending email report..."
+    # Step 3: Generate Feishu report + send email
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Step 3/3: Generating report and sending..."
     PYTHONPATH=src python3 -c "
 import sys; sys.path.insert(0, 'src')
-from data_sources.reporter import send_email_report
-send_email_report('${TRADE_DATE}')
+from data_sources.reporter import Reporter
+Reporter().generate_daily('${TRADE_DATE}', email=True)
 " 2>&1
     
     STATUS=$?

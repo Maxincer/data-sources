@@ -15,7 +15,8 @@ from pathlib import Path
 from data_sources.parser import parse_file, ParseStats, merge_by_code_date
 from data_sources.modifier import (should_filter_contract,
     fix_dce_limit_prices, fix_gfe_margin, fix_gfe_limit_prices,
-    fix_all_margin, fill_zero_volume_close, forward_fill_settlement)
+    fix_all_margin, fill_zero_volume_close,
+    fill_cffex_margin_from_history)
 from data_sources.trade_date import prev_trading_date
 from data_sources.db import create_table, upsert_records
 RAW_DIR = Path("./data/raw")
@@ -28,7 +29,7 @@ def _apply_modifiers(records):
     records = fix_gfe_limit_prices(records)
     records = fix_all_margin(records)
     records = fill_zero_volume_close(records)
-    records = forward_fill_settlement(records)
+    records = fill_cffex_margin_from_history(records)
 
     before = len(records)
     records = [r for r in records if not should_filter_contract(r.get("code", ""))]
@@ -63,11 +64,6 @@ def _ensure_prev_dce_data(date_str: str):
         return
 
     # 整理需要下载的接口名
-    file_to_func = {
-        "TradingParameters": "fetch_dce_tradepara",
-        "SettlementParameters": "fetch_dce_settlement",
-        "DailyMarketData": "fetch_dce_market",
-    }
     print(f"  DCE 缺失前一交易日数据，正在下载 {prev_date}...")
     try:
         from data_sources.fetcher import (

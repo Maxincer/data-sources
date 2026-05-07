@@ -334,7 +334,7 @@ def fix_gfe_margin(records: list) -> list:
     return _fix_margin_inherit(
         records,
         exchange_suffix=".GFE",
-        code_filter="GFE",
+        _code_filter="GFE",
     )
 
 
@@ -363,7 +363,7 @@ def fix_gfe_limit_prices(records: list) -> list:
     for rec in gfe_records:
         by_code[rec["code"]].append(rec)
 
-    for code, recs in by_code.items():
+    for _code, recs in by_code.items():
         recs.sort(key=lambda r: r.get("date", ""))
         prev_maxup = None
         prev_maxdown = None
@@ -401,7 +401,7 @@ def fix_all_margin(records: list) -> list:
 def _fix_margin_inherit(
     records: list,
     exchange_suffix: str = "",
-    code_filter: str = "",
+    _code_filter: str = "",
 ) -> list:
     """通用保证金继承逻辑。
 
@@ -495,7 +495,7 @@ from decimal import Decimal, ROUND_DOWN
 
 def calc_shfe_ine_limit_prices(pre_settle: float, limit_pct_up: float,
                                limit_pct_down: float, tick_size_real: float,
-                               code: str = "") -> tuple:
+                               _code: str = "") -> tuple:
     """SHFE/INE 涨停价/跌停价计算与取整
 
     SHFE/INE 采取向下取整原则：计算结果强制舍去小数，取最小变动价位的
@@ -525,42 +525,82 @@ def calc_shfe_ine_limit_prices(pre_settle: float, limit_pct_up: float,
 
 
 # ===================================================================
-
-
-# ===================================================================
-# 12. 结算参数前向填充（Forward Fill）
+# 12. CFFEX margin 从历史结算文件中继承
 # ===================================================================
 
+import csv
+from pathlib import Path
 
 
-def forward_fill_settlement(records: list) -> list:
+# 辅助：CFFEX 结算文件中百分数字段转浮点
+
+def _pct_val(val: str) -> float | None:
+    """将 '12%' 或 '--' 转为小数形式（0.12 表示 12%）。"""
+    if not val or val.strip() in ("", "--", "N/A"):
+        return None
+    try:
+        return float(val.replace("%", "").strip()) / 100.0
+    except (ValueError, TypeError):
+        return None
+
+
+RAW_DATA_DIR = Path("./data/raw")
+
+
+def fill_cffex_margin_from_history(records: list) -> list:
     """
-    交易所不定时发布结算参数时，未发布日相关字段为 NULL。
-    按合约分组、按日期排序，用上次非 NULL 值前向填充。
+    对 CFFEX 记录中 margin 为 NULL 的，从**非今日**的最近
+    SettlementParameters 文件中读取 margin 值并填充。
 
-    覆盖字段：settle, maxup, maxdown, long_margin, short_margin
-
-    适用场景：CFFEX SettlementParameters 不定时发布；
-             其他交易所结算参数空窗期。
+    即使今日发布了新的结算文件，也不使用它填充——
+    只用历史文件（非今日），避免用今日尚未完整的结算数据覆盖。
     """
-    from collections import defaultdict
+    dates = {r.get("date", "") for r in records if r.get("code", "").endswith(".CFE")}
+    if not dates:
+        return records
 
-    FILL_FIELDS = ["settle", "maxup", "maxdown", "long_margin", "short_margin"]
+    today = max(dates)
 
-    by_code: dict[str, list[dict]] = defaultdict(list)
+    # 查找非今日的最近 SettlementParameters 文件
+    settle_files = sorted(
+        f for f in RAW_DATA_DIR.glob("*.CFFEX.SettlementParameters.*")
+        if today not in f.name
+    )
+    if not settle_files:
+        return records
+
+    latest = settle_files[-1]  # sorted ascending → last = most recent
+
+    # 解析历史结算文件，建立 {code_prefix → (long_margin, short_margin)}
+    margin_map: dict[str, tuple[float | None, float | None]] = {}
+    try:
+        with open(latest, encoding="gbk", errors="replace") as f:
+            lines = f.read().strip().split("\n")
+        reader = csv.DictReader(lines[1:])  # skip title line
+        for row in reader:
+            code = (row.get("期货合约", "") or "").strip()
+            if not code:
+                continue
+            lm = _pct_val(row.get("合约多头保证金标准", ""))
+            sm = _pct_val(row.get("合约空头保证金标准", ""))
+            if lm is not None or sm is not None:
+                margin_map[code] = (lm, sm)
+    except Exception:
+        return records  # 静默失败
+
+    # 回填 CFFEX 记录中 margin 为空的
     for rec in records:
-        by_code[rec.get("code", "")].append(rec)
-
-    for _code, recs in by_code.items():
-        recs.sort(key=lambda r: r.get("date", ""))
-        last_vals = {f: None for f in FILL_FIELDS}
-
-        for rec in recs:
-            for f in FILL_FIELDS:
-                val = rec.get(f)
-                if val is not None:
-                    last_vals[f] = val
-                elif last_vals[f] is not None:
-                    rec[f] = last_vals[f]
+        code = rec.get("code", "")
+        if not code.endswith(".CFE"):
+            continue
+        if rec.get("long_margin") is not None or rec.get("short_margin") is not None:
+            continue
+        prefix = code.replace(".CFE", "")
+        if prefix in margin_map:
+            lm, sm = margin_map[prefix]
+            if rec.get("long_margin") is None and lm is not None:
+                rec["long_margin"] = lm
+            if rec.get("short_margin") is None and sm is not None:
+                rec["short_margin"] = sm
 
     return records

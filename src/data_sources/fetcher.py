@@ -6,30 +6,98 @@ Futures Exchange Daily Settlement Price Fetcher.
 Downloads raw data from SHFE, INE, GFEX, DCE, CZCE, CFFEX.
 """
 
-from datetime import datetime
 import json
+import os
+import re
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
-
-import os
-import time
 
 import fire
 import requests
 
 from mxz_utils.logging_config import get_logger
 
-from data_sources.models import Task
+from data_sources.task import Task
 from data_sources.verifier import Verifier
 from data_sources.reporter import Reporter
-from data_sources.fetcher_task_configs.registry import build_task_configs
-from data_sources.constants import DCE_BASE_URL
+from data_sources.configs import build_task_configs, DCE_BASE_URL
 
 RAW_DATA_DIR = Path("./data/raw")
 RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
 METADATA_FILE = RAW_DATA_DIR / ".metadata.jsonl"
 DCE_API_KEY = "ofxc69rpmd59"
 DCE_API_SECRET = "2UdFW^2G4!4^7#@URqWx"
+
+
+# ---------------------------------------------------------------------------
+# CFFEX helpers
+# ---------------------------------------------------------------------------
+
+CFFEX_JSCS_URL = "http://www.cffex.com.cn/cn/jscs.html"
+_CFFEX_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+}
+
+
+def fetch_cffex_jscs_links() -> List[dict]:
+    """
+    Fetch CFFEX settlement params page and extract all <a> links.
+    Returns list of {"url": str, "text": str}.
+    """
+    resp = requests.get(CFFEX_JSCS_URL, headers=_CFFEX_HEADERS, timeout=15)
+    resp.encoding = "utf-8"
+    html = resp.text
+
+    base = "http://www.cffex.com.cn"
+    links: List[dict] = []
+    pattern = re.compile(
+        r'<a\s[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+        re.IGNORECASE | re.DOTALL,
+    )
+    for match in pattern.finditer(html):
+        href = match.group(1).strip()
+        raw_text = match.group(2).strip()
+        text = re.sub(r"<[^>]+>", "", raw_text).strip()
+        if not href or href.startswith("#") or href.startswith("javascript"):
+            continue
+        full_url = (
+            href if href.startswith("http")
+            else f"{base}/{href.lstrip('/')}"
+        )
+        links.append({"url": full_url, "text": text or href})
+    return links
+
+
+def get_cffex_settlement_available(start_date: str = "20260401") -> list[dict]:
+    """
+    Get all available CFFEX settlement CSV links from jscs.html.
+
+    Returns:
+        [{"date": "YYYYMMDD", "url": str}, ...], sorted descending.
+    """
+    links = fetch_cffex_jscs_links()
+    csv_links = []
+    for link in links:
+        url = link["url"]
+        match = re.search(r"/sj/jscs/\d{6}/\d{2}/(\d{8})_1\.csv", url)
+        if match:
+            d = match.group(1)
+            if d >= start_date:
+                csv_links.append({"date": d, "url": url})
+    seen = set()
+    unique = []
+    for entry in csv_links:
+        if entry["date"] not in seen:
+            seen.add(entry["date"])
+            unique.append(entry)
+    unique.sort(key=lambda x: x["date"], reverse=True)
+    return unique
 
 
 class Fetcher:
@@ -113,46 +181,56 @@ class Fetcher:
         self._write_metadata(task)
 
     # -----------------------------------------------------------------
+    # Generic GET fetch (used by simple GET + verify + save methods)
+    # -----------------------------------------------------------------
+
+    def _do_fetch_get(self, task: Task, label: str = "") -> Dict:
+        """Generic GET + verify + save for simple API calls."""
+        try:
+            resp = requests.get(
+                task.url, headers=self.fake_headers, timeout=30
+            )
+            resp.raise_for_status()
+            prev_size = self.verifier.get_previous_size(task)
+            passed, reason = self.verifier.verify_response(
+                resp.content, prev_size
+            )
+            if not passed:
+                raise ValueError(f"Verification failed: {reason}")
+            task.status_code = resp.status_code
+            self._save_and_record(resp.content, task)
+            return {"success": True}
+        except Exception as e:
+            self.logger.error("%s fetch failed: %s", label, e, exc_info=True)
+            return {"success": False, "error": str(e)}
+
+    # -----------------------------------------------------------------
     # Exchange-specific fetch methods
     # -----------------------------------------------------------------
 
     def _fetch_shfe_settlement(self, task: Task) -> Dict:
-        try:
-            resp = requests.get(
-                task.url, headers=self.fake_headers, timeout=30
-            )
-            resp.raise_for_status()
-            prev_size = self.verifier.get_previous_size(task)
-            passed, reason = self.verifier.verify_response(
-                resp.content, prev_size
-            )
-            if not passed:
-                raise ValueError(f"Verification failed: {reason}")
-            task.status_code = resp.status_code
-            self._save_and_record(resp.content, task)
-            return {"success": True}
-        except Exception as e:
-            self.logger.error("SHFE fetch failed: %s", e, exc_info=True)
-            return {"success": False, "error": str(e)}
+        return self._do_fetch_get(task, "SHFE settlement")
 
     def _fetch_ine_settlement(self, task: Task) -> Dict:
-        try:
-            resp = requests.get(
-                task.url, headers=self.fake_headers, timeout=30
-            )
-            resp.raise_for_status()
-            prev_size = self.verifier.get_previous_size(task)
-            passed, reason = self.verifier.verify_response(
-                resp.content, prev_size
-            )
-            if not passed:
-                raise ValueError(f"Verification failed: {reason}")
-            task.status_code = resp.status_code
-            self._save_and_record(resp.content, task)
-            return {"success": True}
-        except Exception as e:
-            self.logger.error("INE fetch failed: %s", e, exc_info=True)
-            return {"success": False, "error": str(e)}
+        return self._do_fetch_get(task, "INE settlement")
+
+    def _fetch_czce_settlement(self, task: Task) -> Dict:
+        return self._do_fetch_get(task, "CZCE settlement")
+
+    def _fetch_cffex_market(self, task: Task) -> Dict:
+        return self._do_fetch_get(task, "CFFEX market")
+
+    def _fetch_cffex_tradepara(self, task: Task) -> Dict:
+        return self._do_fetch_get(task, "CFFEX tradepara")
+
+    def _fetch_shfe_tradepara(self, task: Task) -> Dict:
+        return self._do_fetch_get(task, "SHFE tradepara")
+
+    def _fetch_ine_tradepara(self, task: Task) -> Dict:
+        return self._do_fetch_get(task, "INE tradepara")
+
+    def _fetch_czce_tradepara(self, task: Task) -> Dict:
+        return self._do_fetch_get(task, "CZCE tradepara")
 
     def _fetch_gfex_settlement(self, task: Task) -> Dict:
         try:
@@ -1003,7 +1081,6 @@ class Fetcher:
                 gfe_latest = d
 
         # ---- CFFEX Settlement 同步 ----
-        from data_sources.models import get_cffex_settlement_available
         try:
             server_files = get_cffex_settlement_available()
             if server_files:
@@ -1102,7 +1179,8 @@ def _fetch_dce_single(date_str: str, config_module: str, fetch_attr: str, label:
     """下载 DCE 单个接口的数据（generic helper）。"""
     f = Fetcher()
     mod = __import__(
-        f"data_sources.fetcher_task_configs.{config_module}",
+        f"data_sources.fetcher_task_configs."
+        f"{config_module}",
         fromlist=["URL_TEMPLATE", "EXCHANGE", "SUFFIX", "DESCRIPTION"],
     )
     task = Task(

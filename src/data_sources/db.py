@@ -8,10 +8,8 @@ New table naming: t_futures_info_{source} where source = "exchange" (cffex, shfe
 Or a combined table for all exchange-sourced data.
 """
 
-import os
 
 import pymysql
-from pymysql.cursors import DictCursor
 
 DB_CONFIG = {
     "host": "192.168.1.202",

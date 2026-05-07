@@ -22,7 +22,6 @@ from bs4 import BeautifulSoup
 from data_sources.modifier import (
     safe_ceil,
     safe_floor,
-    calc_czce_limit_prices,
     calc_shfe_ine_limit_prices,
     zero_price_to_none,
 )
