@@ -3,6 +3,7 @@
 
 import argparse
 import logging
+import os
 from pathlib import Path
 
 from data_sources.parser import parse_file, ParseStats, merge_by_code_date
@@ -18,7 +19,8 @@ from mxz_utils.logging_config import get_logger
 RAW_DIR = Path("./data/raw")
 
 logger = get_logger(
-    "data_sources.writer", logging.DEBUG, "./logs", "writer",
+    "data_sources.writer", logging.DEBUG,
+    os.environ.get("PROJECT_ROOT", ".") + "/logs", "writer",
 )
 
 

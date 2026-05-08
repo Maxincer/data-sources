@@ -44,8 +44,9 @@ class Reporter:
     ]
 
     def __init__(self, logger=None):
+        _log_dir = os.environ.get("PROJECT_ROOT", ".") + "/logs"
         self.logger = logger or get_logger(
-            "data_sources.reporter", logging.DEBUG, "./logs", "reporter",
+            "data_sources.reporter", logging.DEBUG, _log_dir, "reporter",
         )
 
     def task_report(self, tasks: List[Task], trade_date: str) -> None:
