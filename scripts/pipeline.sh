@@ -8,12 +8,11 @@
 export PATH="$HOME/.local/bin:$PATH"
 
 # Resolve project root (works if script is in <project>/scripts/)
-cd "${PROJECT_ROOT:-$(dirname "$0")/..}" || exit 1
-export PROJECT_ROOT=$(pwd)
+cd "$(dirname "$0")/.." || exit 1
 
 TRADE_DATE="${1:-$(date +%Y%m%d)}"
 LOG_FILE="${LOG_FILE:-${HOME}/logs/cron.log}"
-TRADE_DATES_FILE="${PROJECT_ROOT}/data/trade_dates.txt"
+TRADE_DATES_FILE="data/trade_dates.txt"
 
 # ---- 交易日判定 ----
 if [ -f "${TRADE_DATES_FILE}" ]; then
@@ -35,7 +34,7 @@ fi
 # ---- 环境自适应 ----
 if [ -n "${DEV_MODE}" ]; then
     # 开发模式：强制使用本地源码（即使已安装）
-    export PYTHONPATH="${PROJECT_ROOT}/src:${PROJECT_ROOT}/libs/mxz-utils/src"
+    export PYTHONPATH="src:libs/mxz-utils/src"
     RUN_FETCHER="python3 -m data_sources.fetcher run ${TRADE_DATE}"
     RUN_WRITER="python3 -m data_sources.writer --date ${TRADE_DATE}"
     RUN_REPORTER="python3 -m data_sources.reporter ${TRADE_DATE}"
@@ -46,7 +45,7 @@ elif command -v fetcher &> /dev/null; then
     RUN_REPORTER="reporter ${TRADE_DATE}"
 else
     # 后备开发模式：未安装时自动使用源码
-    export PYTHONPATH="${PROJECT_ROOT}/src:${PROJECT_ROOT}/libs/mxz-utils/src"
+    export PYTHONPATH="src:libs/mxz-utils/src"
     RUN_FETCHER="python3 -m data_sources.fetcher run ${TRADE_DATE}"
     RUN_WRITER="python3 -m data_sources.writer --date ${TRADE_DATE}"
     RUN_REPORTER="python3 -m data_sources.reporter ${TRADE_DATE}"
