@@ -1,15 +1,8 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-Writer: parse raw data files and upsert into MySQL t_futures_info_exchange.
-
-Usage:
-    python3 -m data_sources.writer            # parse and write all
-    python3 -m data_sources.writer --dry-run   # parse only, no write
-"""
+"""Writer: parse raw data and upsert into MySQL t_futures_info_exchange."""
 
 import argparse
+import logging
 from pathlib import Path
 
 from data_sources.parser import parse_file, ParseStats, merge_by_code_date
@@ -19,7 +12,14 @@ from data_sources.modifier import (should_filter_contract,
     fill_cffex_margin_from_history)
 from data_sources.trade_date import prev_trading_date
 from data_sources.db import create_table, upsert_records
+from mxz_utils.logging_config import get_logger
+
+
 RAW_DIR = Path("./data/raw")
+
+logger = get_logger(
+    "data_sources.writer", logging.DEBUG, "./logs", "writer",
+)
 
 
 def _apply_modifiers(records):
@@ -32,16 +32,18 @@ def _apply_modifiers(records):
     records = fill_cffex_margin_from_history(records)
 
     before = len(records)
-    records = [r for r in records if not should_filter_contract(r.get("code", ""))]
+    records = [
+        r for r in records
+        if not should_filter_contract(r.get("code", ""))
+    ]
     filtered = before - len(records)
     if filtered:
-        print(f"  Modifier 过滤: {filtered} 条 (TAS/EFP)")
-    # 排除 CSI 指数数据（仅写入期货数据）
+        logger.info("Modifier 过滤: %s 条 (TAS/EFP)", filtered)
     before_csi = len(records)
     records = [r for r in records if not r.get("code", "").endswith(".CSI")]
     csi_filtered = before_csi - len(records)
     if csi_filtered:
-        print(f"  Modifier 过滤: {csi_filtered} 条 (CSI 指数)")
+        logger.info("Modifier 过滤: %s 条 (CSI 指数)", csi_filtered)
     return records
 
 
@@ -53,7 +55,6 @@ def _prev_trading_day(date_str: str) -> str:
 def _ensure_prev_dce_data(date_str: str):
     """确保前一交易日的 DCE 数据存在，缺失则下载。"""
     prev_date = _prev_trading_day(date_str)
-    # Modifier 需要：交易参数表（riseLimit/fallLimit/margin）+ 日行情（lastClear）+ 结算参数（备用margin）
     needed = [
         f"{prev_date}.DCE.TradingParameters.json",
         f"{prev_date}.DCE.DailyMarketData.json",
@@ -63,8 +64,7 @@ def _ensure_prev_dce_data(date_str: str):
     if not missing:
         return
 
-    # 整理需要下载的接口名
-    print(f"  DCE 缺失前一交易日数据，正在下载 {prev_date}...")
+    logger.info("DCE 缺失前一交易日数据，正在下载 %s...", prev_date)
     try:
         from data_sources.fetcher import (
             fetch_dce_tradepara, fetch_dce_settlement,
@@ -78,20 +78,19 @@ def _ensure_prev_dce_data(date_str: str):
                 if suffix in fname:
                     ok = func(prev_date)
                     if ok:
-                        print(f"    ✅ {fname}")
+                        logger.info("  ✅ %s", fname)
                     else:
-                        print(f"    ⚠ {fname} 下载失败")
+                        logger.warning("  ⚠ %s 下载失败", fname)
                     break
     except Exception as e:
-        print(f"  ⚠ 下载失败: {e}")
+        logger.warning("下载失败: %s", e)
 
 
 def write_trade_date(date_str: str, dry_run: bool = False):
-    # 确保 Modifier 所需的前一日 DCE 数据存在
+    """Parse and write data for a specific trade date."""
     _ensure_prev_dce_data(date_str)
-
-    # 加载目标日期 + 前一日的 DCE 数据（Modifier 需要前日值做继承）
     prev_date = _prev_trading_day(date_str)
+    logger.info("写入日期: %s (前日: %s)", date_str, prev_date)
 
     records = []
     stats_list = []
@@ -99,7 +98,6 @@ def write_trade_date(date_str: str, dry_run: bool = False):
     for fpath in sorted(RAW_DIR.iterdir()):
         if not fpath.is_file() or fpath.suffix == ".jsonl":
             continue
-        # 加载目标日期 和 前一日 的文件
         if date_str not in fpath.name and prev_date not in fpath.name:
             continue
         name = fpath.name
@@ -112,26 +110,31 @@ def write_trade_date(date_str: str, dry_run: bool = False):
             for rec in parsed:
                 stats.add_record(rec)
             records.extend(parsed)
+            logger.debug("解析 %s: %s 条记录", fpath.name, len(parsed))
         except Exception as e:
             stats.add_error(str(e))
+            logger.error("解析失败 %s: %s", fpath.name, e)
         stats_list.append(stats)
 
     if not records:
+        logger.info("无数据可处理")
         return 0, [s.stats_summary for s in stats_list]
 
     records = merge_by_code_date(records)
     records = _apply_modifiers(records)
 
-    # 写库时只写入目标日期的数据，排除前一日（仅用于 Modifier)）
     target_records = [r for r in records if r.get("date") == date_str]
+    logger.info("目标日期记录数: %s", len(target_records))
     if dry_run:
         return len(target_records), [s.stats_summary for s in stats_list]
     create_table()
     written = upsert_records(target_records)
+    logger.info("写入完成: %s 条", written)
     return written, [s.stats_summary for s in stats_list]
 
 
 def write_all(dry_run: bool = False):
+    """Parse and write all raw data files."""
     records = []
     stats_list = []
 
@@ -148,19 +151,24 @@ def write_all(dry_run: bool = False):
             for rec in parsed:
                 stats.add_record(rec)
             records.extend(parsed)
+            logger.debug("解析 %s: %s 条记录", fpath.name, len(parsed))
         except Exception as e:
             stats.add_error(str(e))
+            logger.error("解析失败 %s: %s", fpath.name, e)
         stats_list.append(stats)
 
     if not records:
+        logger.info("无数据可处理")
         return 0, [s.stats_summary for s in stats_list]
 
     records = merge_by_code_date(records)
     records = _apply_modifiers(records)
+    logger.info("写入总记录数: %s", len(records))
     if dry_run:
         return len(records), [s.stats_summary for s in stats_list]
     create_table()
     written = upsert_records(records)
+    logger.info("写入完成: %s 条", written)
     return written, [s.stats_summary for s in stats_list]
 
 

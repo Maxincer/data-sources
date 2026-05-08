@@ -1,15 +1,7 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""Reporter: all pipeline reporting in one place."""
 
-"""
-Reporter: all pipeline reporting in one place.
-
-Responsibilities (all via Reporter class):
-  - task_report()     → file size change report (used by Fetcher)
-  - generate_daily()  → comprehensive daily verification → Feishu
-  - send_email()      → same report content → email
-"""
-
+import argparse
 import json
 import os
 import smtplib
@@ -20,16 +12,17 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from typing import List, Optional
 
+import logging
+
 import pymysql
+import requests
 from pymysql.cursors import DictCursor
 
 from data_sources.task import Task
 from data_sources.verifier import DB_CONFIG, Verifier
+from mxz_utils.logging_config import get_logger
 
 
-# ---------------------------------------------------------------------------
-# Report content fields (shared by Feishu / email output)
-# ---------------------------------------------------------------------------
 _FULL_FIELDS = [
     "open", "high", "low", "close", "volume", "amt", "oi",
     "settle", "maxup", "maxdown", "long_margin", "short_margin",
@@ -41,20 +34,19 @@ _FEISHU_WEBHOOK = (
 )
 
 
-# ===================================================================
-# Reporter
-# ===================================================================
-
-
 class Reporter:
     """All pipeline reporting methods."""
 
-    def __init__(self, logger=None):
-        self.logger = logger or _SilentLogger()
+    _DEFAULT_SENDER = "mxz@wendao.fund"
+    _DEFAULT_RECIPIENTS = [
+        "fisher@wendao.fund",
+        "chendingzhong@wendao.fund",
+    ]
 
-    # ------------------------------------------------------------------
-    # 1. File size change report (used by Fetcher)
-    # ------------------------------------------------------------------
+    def __init__(self, logger=None):
+        self.logger = logger or get_logger(
+            "data_sources.reporter", logging.DEBUG, "./logs", "reporter",
+        )
 
     def task_report(self, tasks: List[Task], trade_date: str) -> None:
         """Send a Markdown table of file size changes."""
@@ -85,28 +77,25 @@ class Reporter:
         lines.append(f"总大小: {total_current:,} 字节")
         self.logger.alert("\n".join(lines))
 
-    # ------------------------------------------------------------------
-    # 2. Comprehensive daily report → Feishu
-    # ------------------------------------------------------------------
-
-    def generate_daily(self, date_str: str, *,
-                       email: bool = False,
-                       email_recipients: Optional[list[str]] = None) -> None:
-        """
-        Generate daily data verification report.
+    def generate_daily(
+        self, date_str: str, *,
+        email: bool = False,
+        sender: Optional[str] = None,
+        email_recipients: Optional[list[str]] = None,
+    ) -> None:
+        """Generate daily data verification report.
 
         一次计算，两个渠道：
           1. 飞书（默认）
           2. 邮件（email=True 时同时发送）
         """
-        v = Verifier(_SilentLogger())
+        v = Verifier(self.logger)
         stats = v.get_field_stats(date_str)
         abnormal = v.get_abnormal_nulls(date_str)
         comp = v.compare_all(target_date=date_str)
         ec = comp.get("exchange_counts", {})
         fd = comp.get("field_diffs", {})
 
-        # 飞书
         feishu_sections = [
             self._build_file_size_section(date_str),
             self._build_field_stats_section(stats, abnormal),
@@ -117,35 +106,38 @@ class Reporter:
             "\n\n---\n\n".join(feishu_sections),
         )
 
-        # 邮件（可选）
         if email:
-            self._smtp_send(date_str, stats, abnormal, ec, fd, comp,
-                            recipients=email_recipients)
+            recipients = email_recipients or self._DEFAULT_RECIPIENTS
+            sender_addr = sender or self._DEFAULT_SENDER
+            self._smtp_send(
+                date_str, stats, abnormal, ec, fd, comp,
+                sender=sender_addr, recipients=recipients,
+            )
 
-        self.logger.info(f"Report for {date_str} sent.")
+        self.logger.info("Report for %s sent.", date_str)
 
-    # ------------------------------------------------------------------
-    # 3. 邮件发送
-    # ------------------------------------------------------------------
-
-    def send_email(self, date_str: str) -> None:
+    def send_email(
+        self, date_str: str,
+        sender: Optional[str] = None,
+        recipients: Optional[list[str]] = None,
+    ) -> None:
         """快捷方式：只发邮件。"""
-        self.generate_daily(date_str, email=True)
+        self.generate_daily(
+            date_str, email=True,
+            sender=sender, email_recipients=recipients,
+        )
 
-    def _smtp_send(self, date_str: str,
-                   stats: dict, abnormal: dict,
-                   ec: dict, fd: dict,
-                   comp: dict,
-                   recipients: Optional[list[str]] = None) -> None:
+    def _smtp_send(self, date_str, stats, abnormal, ec, fd, comp,
+                   sender=None, recipients=None):
         """发送邮件（SMTP），使用已计算好的数据。"""
         password = os.environ.get("SMTP_PASSWORD")
         if not password:
             self.logger.warning("SMTP_PASSWORD 未设置，跳过邮件发送")
             return
 
-        if recipients is None:
-            recipients = ["wanghaibo@wendao.fund", "chendingzhong@wendao.fund"]
-        sender = "mxz@wendao.fund"
+        if not sender or not recipients:
+            self.logger.warning("发件人/收件人未设置，跳过邮件发送")
+            return
 
         html_parts = [
             self._email_header(date_str),
@@ -169,17 +161,11 @@ class Reporter:
                               context=ctx) as server:
             server.login(sender, password)
             server.sendmail(sender, recipients, msg.as_string())
-        self.logger.info(f"邮件已发送至: {', '.join(recipients)}")
-
-    # ==============================================================
-    # Private: Feishu message sending
-    # ==============================================================
+        self.logger.info("邮件已发送至: %s", ", ".join(recipients))
 
     @staticmethod
     def _send_feishu_markdown(title: str, content: str):
         """Send a markdown message to the Feishu webhook."""
-        import requests
-
         if len(content) > 25000:
             content = content[:25000] + "\n\n... (truncated)"
 
@@ -201,10 +187,6 @@ class Reporter:
         except Exception as e:
             print(f"[WARN] Failed to send Feishu message: {e}")
 
-    # ==============================================================
-    # Private: daily report section builders
-    # ==============================================================
-
     @staticmethod
     def _build_file_size_section(date_str: str) -> str:
         """Section 1: file size changes from metadata."""
@@ -219,7 +201,8 @@ class Reporter:
                 for line in f:
                     try:
                         rec = json.loads(line)
-                        if date_str in rec.get("local_filename", ""):
+                        lfn = rec.get("local_filename", "")
+                        if date_str in lfn:
                             fn = rec["local_filename"]
                             sz = rec.get("file_size_bytes", 0)
                             prev = rec.get("previous_size_bytes")
@@ -270,7 +253,7 @@ class Reporter:
                     code = (rec.get("code", "") or "").split(".")[0] or "?"
                     nulls = rec.get("_null_fields", []) or []
                     old_nulls = rec.get("_old_null", set()) or set()
-                    classification = rec.get("_classification", "") or ""
+                    cls = rec.get("_classification", "") or ""
                     tags = [
                         f"{f}(旧表同)" if f in old_nulls else f
                         for f in nulls
@@ -280,7 +263,7 @@ class Reporter:
                     amt_str = f"{amt:>,.0f}" if amt else "—"
                     lines.append(
                         f"| {code} | {null_str} | {amt_str} |"
-                        f" {classification} |"
+                        f" {cls} |"
                     )
             lines.append("")
         return "\n".join(lines)
@@ -294,18 +277,15 @@ class Reporter:
             "",
         ]
         try:
-            lines.append(
-                "| 交易所 | 原表 | 新表 | 缺漏 | 多余 |"
-            )
-            lines.append(
-                "| :--- | ---: | ---: | ---: | ---: |"
-            )
-            for ex, ec in sorted(comp.get("exchange_counts", {}).items()):
+            ec = comp.get("exchange_counts", {})
+            lines.append("| 交易所 | 原表 | 新表 | 缺漏 | 多余 |")
+            lines.append("| :--- | ---: | ---: | ---: | ---: |")
+            for ex in sorted(ec.keys()):
                 if ex == "CSI":
                     continue
                 lines.append(
-                    f"| {ex} | {ec['original']} | {ec['new']} | "
-                    f"{ec['missing_in_new']} | {ec['extra_in_new']} |"
+                    f"| {ex} | {ec[ex]['original']} | {ec[ex]['new']} | "
+                    f"{ec[ex]['missing_in_new']} | {ec[ex]['extra_in_new']} |"
                 )
 
             original_table = "t_futures_info"
@@ -328,11 +308,12 @@ class Reporter:
                     lines.append(f"  ➕ {_fmt_rec_line(rec)}")
             lines.append("")
 
-            has_field_diff = False
-            for ex in sorted(comp.get("field_diffs", {}).keys()):
+            has_diff = False
+            fd = comp.get("field_diffs", {})
+            for ex in sorted(fd.keys()):
                 if ex == "CSI":
                     continue
-                ex_diffs = comp["field_diffs"][ex]
+                ex_diffs = fd[ex]
                 has_any = any(
                     s["diff"] > 0
                     or s["missing_in_original"] > 0
@@ -341,7 +322,7 @@ class Reporter:
                 )
                 if not has_any:
                     continue
-                has_field_diff = True
+                has_diff = True
                 for field in _FULL_FIELDS:
                     s = ex_diffs.get(field, {})
                     if (
@@ -359,22 +340,25 @@ class Reporter:
                             f" 新={sd['new']}"
                         )
 
-            if not has_field_diff:
+            if not has_diff:
                 lines.append("✅ 字段无差异")
         except Exception as e:
             lines.append(f"**对比失败**: {e}")
 
         return "\n".join(lines)
 
-    # ==============================================================
-    # Private: email HTML builders
-    # ==============================================================
-
     @staticmethod
     def _email_header(date_str: str) -> str:
-        return f"""<html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#333;max-width:900px;margin:0 auto;padding:20px;">
-<h1 style="color:#1a73e8;border-bottom:2px solid #1a73e8;padding-bottom:10px;">
-📊 数据验证报告 {date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}</h1>"""
+        return (
+            '<html><body style="font-family:-apple-system,'
+            'BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif;'
+            'color:#333;max-width:900px;margin:0 auto;padding:20px;">'
+            '<h1 style="color:#1a73e8;border-bottom:2px solid #1a73e8;'
+            'padding-bottom:10px;">'
+            f"📊 数据验证报告 "
+            f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+            "</h1>"
+        )
 
     @staticmethod
     def _email_coverage(ec: dict, comp: dict, date_str: str) -> str:
@@ -399,7 +383,8 @@ class Reporter:
                 f'<td style="text-align:center">{c["new"]}</td>'
                 f'<td style="text-align:center;color:{color}">'
                 f'{c["missing_in_new"]}</td>'
-                f'<td style="text-align:center">{c["extra_in_new"]}</td></tr>'
+                f'<td style="text-align:center">'
+                f'{c["extra_in_new"]}</td></tr>'
             )
         parts.append('</table>')
 
@@ -422,14 +407,18 @@ class Reporter:
                 missing_records[:10], "t_futures_info", date_str
             ):
                 parts.append(
-                    '<tr><td>' + (rec.get("code", "") or "") + '</td>' +
-                    ''.join(_td(rec.get(f)) for f in _FULL_FIELDS) +
-                    '</tr>'
+                    '<tr><td>'
+                    + ((rec.get("code", "") or ""))
+                    + '</td>' + ''.join(_td(rec.get(f))
+                                        for f in _FULL_FIELDS)
+                    + '</tr>'
                 )
             parts.append('</table>')
 
         if extra_records:
-            parts.append('<h3>➕ 多余明细 (新表有/原表无, 最多10条)</h3>')
+            parts.append(
+                '<h3>➕ 多余明细 (新表有/原表无, 最多10条)</h3>'
+            )
             parts.append(
                 '<table border="1" cellpadding="4" cellspacing="0"'
                 ' style="border-collapse:collapse;font-size:12px;">'
@@ -443,9 +432,11 @@ class Reporter:
                 extra_records[:10], "t_futures_info_exchange", date_str
             ):
                 parts.append(
-                    '<tr><td>' + (rec.get("code", "") or "") + '</td>' +
-                    ''.join(_td(rec.get(f)) for f in _FULL_FIELDS) +
-                    '</tr>'
+                    '<tr><td>'
+                    + ((rec.get("code", "") or ""))
+                    + '</td>' + ''.join(_td(rec.get(f))
+                                        for f in _FULL_FIELDS)
+                    + '</tr>'
                 )
             parts.append('</table>')
         return "\n".join(parts)
@@ -494,16 +485,18 @@ class Reporter:
                     '<th>判定</th></tr>'
                 )
                 for rec in abnormal[ex]:
-                    code = (rec.get("code", "") or "").split(".")[0] or "?"
+                    code = (
+                        (rec.get("code", "") or "").split(".")[0] or "?"
+                    )
                     nulls = rec.get("_null_fields", []) or []
-                    classification = rec.get("_classification", "") or ""
+                    cls = rec.get("_classification", "") or ""
                     amt = rec.get("amt")
                     amt_str = f"{amt:>,.0f}" if amt else "—"
                     parts.append(
                         f'<tr><td>{code}</td>'
                         f'<td>{", ".join(nulls)}</td>'
                         f'<td style="text-align:right">{amt_str}</td>'
-                        f'<td>{classification}</td></tr>'
+                        f'<td>{cls}</td></tr>'
                     )
                 parts.append('</table>')
         return "\n".join(parts)
@@ -556,24 +549,12 @@ class Reporter:
 
     @staticmethod
     def _email_footer() -> str:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return (
             f'<p style="color:#999;font-size:12px;margin-top:30px;">'
-            f'报告生成: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+            f'报告生成: {now}'
             f'</p></body></html>'
         )
-
-
-# ===================================================================
-# Internal helpers
-# ===================================================================
-
-
-class _SilentLogger:
-    """No-op logger for self-contained report generation."""
-    def info(self, *a, **kw): pass
-    def warning(self, *a, **kw): pass
-    def error(self, *a, **kw): pass
-    def alert(self, *a, **kw): pass
 
 
 def _fetch_records_details(records: list, table: str,
@@ -627,7 +608,7 @@ def _td(val) -> str:
         return '<td style="text-align:center">—</td>'
     try:
         fv = float(val)
-        if abs(fv) >= 1_000_000:  # amt or large number
+        if abs(fv) >= 1_000_000:
             return f'<td style="text-align:right">{fv:,.0f}</td>'
         if fv == int(fv):
             return f'<td style="text-align:right">{int(fv)}</td>'
@@ -636,17 +617,39 @@ def _td(val) -> str:
         return f'<td>{val}</td>'
 
 
-# ===================================================================
-# CLI entry point
-# ===================================================================
-
-if __name__ == "__main__":
-    import sys
+def main():
+    """CLI entry point. Supports python -m data_sources.reporter."""
+    parser = argparse.ArgumentParser(
+        description="Data sources reporter"
+    )
+    parser.add_argument("date", nargs="?", default=None,
+                        help="Trade date YYYYMMDD, default today")
+    parser.add_argument("--sender", default=None,
+                        help="Sender email address")
+    parser.add_argument("--recipients", default=None,
+                        help="Comma-separated recipient email addresses")
+    args = parser.parse_args()
 
     date_str = (
-        sys.argv[1]
-        if len(sys.argv) > 1
+        args.date
+        if args.date
         else datetime.now().strftime("%Y%m%d")
     )
-    r = Reporter(_SilentLogger())
-    r.generate_daily(date_str)
+    recipients = (
+        args.recipients.split(",")
+        if args.recipients
+        else None
+    )
+    send_email = bool(args.sender and recipients)
+
+    r = Reporter()
+    r.generate_daily(
+        date_str,
+        email=send_email,
+        sender=args.sender,
+        email_recipients=recipients,
+    )
+
+
+if __name__ == "__main__":
+    main()
