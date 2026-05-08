@@ -102,11 +102,10 @@ def get_cffex_settlement_available(start_date: str = "20260401") -> list[dict]:
 
 class Fetcher:
     def __init__(self):
-        _log_dir = os.environ.get("PROJECT_ROOT", ".") + "/logs"
         self.logger = get_logger(
             name="Fetcher",
             level="INFO",
-            dirpath_logs=_log_dir,
+            dirpath_logs="./logs",
             logfile_basename="Fetcher",
         )
         self.fake_headers = {

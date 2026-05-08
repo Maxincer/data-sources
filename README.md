@@ -466,11 +466,8 @@ bash scripts/pipeline.sh
 | 文件 | 说明 |
 |------|------|
 | `${HOME}/logs/cron.log` | pipeline.sh stdout/stderr（crontab 流水线日志） |
-| `${PROJECT_ROOT}/logs/fetcher.*.log` | Fetcher 模块的 AlertLogger 日志 |
-| `${PROJECT_ROOT}/logs/writer.*.log` | Writer 模块的 AlertLogger 日志 |
-| `${PROJECT_ROOT}/logs/reporter.*.log` | Reporter 模块的 AlertLogger 日志 |
-
-> 日志存储位置默认相对于 `PROJECT_ROOT`（由 `pipeline.sh` 通过 `cd` 和 `export PROJECT_ROOT` 确定）。
-> 直接调用 Python 模块时（无 `PROJECT_ROOT` 环境变量），回退到 `./logs/`。
+| `./logs/fetcher.*.log` | Fetcher 模块的 AlertLogger 日志 |
+| `./logs/writer.*.log` | Writer 模块的 AlertLogger 日志 |
+| `./logs/reporter.*.log` | Reporter 模块的 AlertLogger 日志 |
 
 日志文件按日期轮转（`HybridRotatingFileHandler`），单文件上限 100MB，保留 30 天。
