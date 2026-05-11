@@ -19,7 +19,7 @@ import requests
 from pymysql.cursors import DictCursor
 
 from data_sources.task import Task
-from data_sources.verifier import DB_CONFIG, Verifier
+from data_sources.verifier import DB_CONFIG, DB_CONFIG_ORIG, Verifier
 from mxz_utils.logging_config import get_logger
 
 
@@ -141,6 +141,7 @@ class Reporter:
 
         html_parts = [
             self._email_header(date_str),
+            self._email_file_size_section(date_str),
             self._email_coverage(ec, comp, date_str),
             self._email_field_stats(stats, abnormal),
             self._email_field_diffs(fd),
@@ -346,6 +347,55 @@ class Reporter:
             lines.append(f"**对比失败**: {e}")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _email_file_size_section(date_str: str) -> str:
+        """File size section for email, matching Feishu format."""
+        metadata_file = Path("./data/raw/.metadata.jsonl")
+        parts = ['<h2>📁 数据文件尺寸变化</h2>']
+        if metadata_file.exists():
+            parts.append(
+                '<table border="1" cellpadding="8" cellspacing="0"'
+                ' style="border-collapse:collapse;width:100%;">'
+            )
+            parts.append(
+                '<tr style="background:#f5f5f5;">'
+                '<th>文件</th><th>本次(bytes)</th><th>上次(bytes)</th>'
+                '<th>变化率</th></tr>'
+            )
+            total_size = 0
+            with open(metadata_file) as f:
+                for line in f:
+                    try:
+                        rec = json.loads(line)
+                        lfn = rec.get("local_filename", "")
+                        if date_str not in lfn:
+                            continue
+                        fn = rec["local_filename"]
+                        sz = rec.get("file_size_bytes", 0)
+                        prev = rec.get("previous_size_bytes")
+                        chg = rec.get("size_change_percent")
+                        prev_str = f"{prev:,}" if prev else "N/A"
+                        chg_str = f"{chg:+.2f}%" if chg else "N/A"
+                        flag = " 🔴" if chg and abs(chg) > 5 else ""
+                        parts.append(
+                            f'<tr><td>{fn}</td>'
+                            f'<td style="text-align:right">{sz:,}</td>'
+                            f'<td style="text-align:right">{prev_str}</td>'
+                            f'<td style="text-align:right">{chg_str}{flag}</td></tr>'
+                        )
+                        total_size += sz
+                    except Exception:
+                        pass
+            parts.append(
+                f'<tr style="background:#f0f0f0;"><td><b>合计</b></td>'
+                f'<td style="text-align:right"><b>{total_size:,}</b></td>'
+                f'<td></td><td></td></tr>'
+            )
+            parts.append('</table>')
+        else:
+            parts.append('<p>⚠️ 无元数据文件</p>')
+        return "\n".join(parts)
 
     @staticmethod
     def _email_header(date_str: str) -> str:
@@ -560,7 +610,8 @@ class Reporter:
 def _fetch_records_details(records: list, table: str,
                            date_str: str) -> list:
     """查询记录的所有字段值。"""
-    conn = pymysql.connect(**DB_CONFIG, cursorclass=DictCursor)
+    cfg = DB_CONFIG if table == "t_futures_info_exchange" else DB_CONFIG_ORIG
+    conn = pymysql.connect(**cfg, cursorclass=DictCursor)
     try:
         with conn.cursor() as cur:
             dt = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"

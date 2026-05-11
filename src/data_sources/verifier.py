@@ -27,6 +27,15 @@ DB_CONFIG = {
 ORIGINAL_TABLE = "t_futures_info"
 NEW_TABLE = "t_futures_info_exchange"
 
+# t_futures_info 已迁移到 201，只读；t_futures_info_exchange 仍在 202
+DB_CONFIG_ORIG = {
+    "host": "192.168.1.201",
+    "user": "root",
+    "password": "root0808",
+    "database": "future_cn",
+    "charset": "utf8mb4",
+}
+
 
 class CompareResult:
     """Result of field-by-field comparison between two tables."""
@@ -183,6 +192,12 @@ class Verifier:
     def _get_conn(self):
         return pymysql.connect(
             **DB_CONFIG, cursorclass=pymysql.cursors.DictCursor
+        )
+
+    def _get_conn_orig(self):
+        """Connection to server 201 (t_futures_info only, read-only)."""
+        return pymysql.connect(
+            **DB_CONFIG_ORIG, cursorclass=pymysql.cursors.DictCursor
         )
 
     @staticmethod
@@ -406,13 +421,18 @@ class Verifier:
                                        and f != "amt"]
                         if not null_fields:
                             continue
-                        # 查旧表同条数据
-                        cur.execute(f"""
-                            SELECT {', '.join(null_fields)}
-                            FROM future_cn.t_futures_info
-                            WHERE code = '{code}' AND date = '{dt}'
-                        """)
-                        old_row = cur.fetchone()
+                        # 查旧表同条数据（走 201）
+                        orig_conn = self._get_conn_orig()
+                        try:
+                            with orig_conn.cursor() as orig_cur:
+                                orig_cur.execute(f"""
+                                    SELECT {', '.join(null_fields)}
+                                    FROM future_cn.t_futures_info
+                                    WHERE code = '{code}' AND date = '{dt}'
+                                """)
+                                old_row = orig_cur.fetchone()
+                        finally:
+                            orig_conn.close()
                         old_null = set()
                         if old_row:
                             for f in null_fields:
@@ -432,14 +452,14 @@ class Verifier:
         判断异常空值是否为可允许异常（无旧表时的启发式规则）。
 
         规则：
-        - OHLC 全部为空、close 有值、volume < 5 → 冷门合约 API 限制
+        - OHLC 全部为空、close 有值、volume < 300 → 冷门/临期合约无OHLC
         - 其余情况 → 需核查
         """
         nulls = [f for f in ("open", "high", "low") if rec.get(f) is None]
         if len(nulls) == 3 and rec.get("close") is not None:
             vol = rec.get("volume") or 0
-            if vol < 5:
-                return "✅ 可允许: 冷合API无OHLC"
+            if vol < 300:
+                return "✅ 可允许: 量小无OHLC"
         return "⚠️ 需核查"
 
     # -----------------------------------------------------------------
@@ -472,206 +492,190 @@ class Verifier:
               - extra_records:   [{code, date}] (in new but not orig)
               - summary:         overall summary text
         """
-        date_where = ""
+        dt = None
         if target_date:
             dt = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:8]}"
-            date_where = f"AND a.date = '{dt}'"
 
-        conn = self._get_conn()
-        try:
-            with conn.cursor() as cur:
-                # --- (A) Full outer join: matching status for all (code, date) ---
-                sql = f"""
-                    SELECT a.code, a.date, a.match_status
-                    FROM (
-                        SELECT o.code, o.date, 'matched' AS match_status
-                        FROM `future_cn`.{ORIGINAL_TABLE} o
-                        INNER JOIN `future_cn`.{NEW_TABLE} n
-                            ON o.code = n.code AND o.date = n.date
-                        UNION
-                        SELECT o.code, o.date, 'missing_in_new'
-                        FROM `future_cn`.{ORIGINAL_TABLE} o
-                        LEFT JOIN `future_cn`.{NEW_TABLE} n
-                            ON o.code = n.code AND o.date = n.date
-                        WHERE n.code IS NULL
-                        UNION
-                        SELECT n.code, n.date, 'extra_in_new'
-                        FROM `future_cn`.{NEW_TABLE} n
-                        LEFT JOIN `future_cn`.{ORIGINAL_TABLE} o
-                            ON n.code = o.code AND n.date = o.date
-                        WHERE o.code IS NULL
-                    ) a
-                    WHERE 1=1 {date_where}
-                    ORDER BY a.date DESC
-                """
-                cur.execute(sql)
-                match_rows = cur.fetchall()
-
-                missing_records = []
-                extra_records = []
-                matched_set = set()
-                for row in match_rows:
-                    status = row["match_status"]
-                    key = (row["code"], self._format_date(row["date"]))
-                    if status == "matched":
-                        matched_set.add(key)
-                    elif status == "missing_in_new":
-                        missing_records.append({
-                            "code": row["code"],
-                            "date": self._format_date(row["date"]),
-                        })
-                    elif status == "extra_in_new":
-                        extra_records.append({
-                            "code": row["code"],
-                            "date": self._format_date(row["date"]),
-                        })
-
-                # --- (B) Exchange-level count summary ---
-                exchange_counts = {}
-                for rec in missing_records:
-                    ex = rec["code"].rsplit(".", 1)[-1] if "." in rec["code"] else "?"
-                    exchange_counts.setdefault(ex, {
-                        "original": 0, "new": 0,
-                        "missing_in_new": 0, "extra_in_new": 0,
-                    })["missing_in_new"] += 1
-                for rec in extra_records:
-                    ex = rec["code"].rsplit(".", 1)[-1] if "." in rec["code"] else "?"
-                    exchange_counts.setdefault(ex, {
-                        "original": 0, "new": 0,
-                        "missing_in_new": 0, "extra_in_new": 0,
-                    })["extra_in_new"] += 1
-
-                # Count originals per exchange
-                date_filter_orig = ""
-                date_filter_new = ""
-                if target_date:
-                    dt = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:8]}"
-                    date_filter_orig = f"AND o.date = '{dt}'"
-                    date_filter_new = f"AND n.date = '{dt}'"
-
-                sql_orig = f"""
-                    SELECT SUBSTRING_INDEX(o.code, '.', -1) AS ex,
-                           COUNT(*) AS cnt
-                    FROM `future_cn`.{ORIGINAL_TABLE} o
-                    WHERE 1=1 {date_filter_orig}
-                    GROUP BY ex
-                """
-                cur.execute(sql_orig)
-                for row in cur.fetchall():
-                    ex = row["ex"]
-                    exchange_counts.setdefault(ex, {
-                        "original": 0, "new": 0,
-                        "missing_in_new": 0, "extra_in_new": 0,
-                    })["original"] = row["cnt"]
-
-                sql_new = f"""
-                    SELECT SUBSTRING_INDEX(n.code, '.', -1) AS ex,
-                           COUNT(*) AS cnt
-                    FROM `future_cn`.{NEW_TABLE} n
-                    WHERE 1=1 {date_filter_new}
-                    GROUP BY ex
-                """
-                cur.execute(sql_new)
-                for row in cur.fetchall():
-                    ex = row["ex"]
-                    exchange_counts.setdefault(ex, {
-                        "original": 0, "new": 0,
-                        "missing_in_new": 0, "extra_in_new": 0,
-                    })["new"] = row["cnt"]
-
-                # --- (C) Field-level comparison on matched records,
-                #       broken down by exchange ---
-                fields = [
-                    "open", "high", "low", "close", "volume",
-                    "amt", "oi", "settle", "maxup", "maxdown",
-                    "long_margin", "short_margin", "minoq", "maxoq",
-                ]
-                # field_results[exchange][field] = CompareResult
-                field_results: Dict[str, Dict[str, CompareResult]] = {}
-
-                if not matched_set:
-                    return {
-                        "exchange_counts": exchange_counts,
-                        "field_diffs": {},
-                        "missing_records": missing_records,
-                        "extra_records": extra_records,
-                        "summary": self._format_summary(
-                            exchange_counts, field_results,
-                            missing_records, extra_records, target_date,
-                        ),
-                    }
-
-                code_date_list = list(matched_set)
-                for cd_start in range(0, len(code_date_list), 500):
-                    batch = code_date_list[cd_start:cd_start + 500]
-                    conditions = " OR ".join([
-                        f"(o.code = '{c}' AND o.date = '{d[:4]}-{d[4:6]}-{d[6:8]}')"
-                        for c, d in batch
-                    ])
-                    col_list = ", ".join(
-                        [f"o.{f} AS o_{f}" for f in fields]
-                        + [f"n.{f} AS n_{f}" for f in fields]
-                    )
+        # --- (A) 从两个服务器分别拉 (code, date) 集合，Python 做合并匹配 ---
+        def _fetch_all_codes(conn_fn, table, date_filter):
+            conn = conn_fn()
+            try:
+                with conn.cursor() as cur:
                     sql = f"""
-                        SELECT o.code, o.date, {col_list}
-                        FROM `future_cn`.{ORIGINAL_TABLE} o
-                        INNER JOIN `future_cn`.{NEW_TABLE} n
-                            ON o.code = n.code AND o.date = n.date
-                        WHERE {conditions}
+                        SELECT code, date
+                        FROM `future_cn`.{table}
+                        WHERE 1=1 {date_filter}
+                        ORDER BY code, date
                     """
                     cur.execute(sql)
-                    rows = cur.fetchall()
+                    return cur.fetchall()
+            finally:
+                conn.close()
 
-                    for row in rows:
-                        code = row["code"]
-                        date = self._format_date(row["date"])
-                        ex = code.rsplit(".", 1)[-1] if "." in code else "?"
+        date_filter_orig = f"AND date = '{dt}'" if dt else ""
+        date_filter_new = f"AND date = '{dt}'" if dt else ""
 
-                        if ex not in field_results:
-                            field_results[ex] = {
-                                f: CompareResult(f) for f in fields
-                            }
+        orig_rows = _fetch_all_codes(self._get_conn_orig, ORIGINAL_TABLE, date_filter_orig)
+        new_rows = _fetch_all_codes(self._get_conn, NEW_TABLE, date_filter_new)
 
-                        for field in fields:
-                            ov = row.get(f"o_{field}")
-                            nv = row.get(f"n_{field}")
-                            cr = field_results[ex][field]
+        def _fmt_dt(d):
+            """Normalize date to YYYY-MM-DD string."""
+            s = str(d).replace("-", "")
+            return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
 
-                            if ov is None and nv is None:
-                                continue
-                            if ov is None and nv is not None:
-                                cr.total_missing_original += 1
-                                continue
-                            if ov is not None and nv is None:
-                                cr.total_missing_new += 1
-                                # 异常缺失：同一条的 amt(旧表) 不为 0 或 amt 本身缺失
-                                oa = row.get("o_amt")
-                                if field == "amt" or oa is None or float(oa) != 0:
-                                    cr.total_abnormal_missing_new += 1
-                                continue
+        # Normalize code to uppercase for comparison (201 stores UPPER, 202 stores lower)
+        orig_set = {(r["code"].upper(), _fmt_dt(r["date"])) for r in orig_rows}
+        new_set = {(r["code"].upper(), _fmt_dt(r["date"])) for r in new_rows}
 
-                            ov = float(ov)
-                            nv = float(nv)
-                            diff_val = abs(ov - nv)
-                            max_abs = max(abs(ov), abs(nv))
-                            deviation = diff_val / max_abs * 100 if max_abs > 0 else 0.0
+        matched_set = orig_set & new_set
+        missing_records = [{"code": c, "date": d} for c, d in sorted(orig_set - new_set)]
+        extra_records = [{"code": c, "date": d} for c, d in sorted(new_set - orig_set)]
 
-                            if deviation > tolerance:
-                                cr.total_diff += 1
-                                cr.max_deviation = max(cr.max_deviation, deviation)
-                                if len(cr.sample_diffs) < 10:
-                                    cr.sample_diffs.append({
-                                        "code": code,
-                                        "date": date,
-                                        "original": round(ov, 4),
-                                        "new": round(nv, 4),
-                                        "deviation_pct": round(deviation, 4),
-                                    })
-                            else:
-                                cr.total_matched += 1
+        # --- (B) Exchange-level count summary ---
+        exchange_counts = {}
+        for rec in missing_records:
+            ex = rec["code"].rsplit(".", 1)[-1] if "." in rec["code"] else "?"
+            exchange_counts.setdefault(ex, {
+                "original": 0, "new": 0,
+                "missing_in_new": 0, "extra_in_new": 0,
+            })["missing_in_new"] += 1
+        for rec in extra_records:
+            ex = rec["code"].rsplit(".", 1)[-1] if "." in rec["code"] else "?"
+            exchange_counts.setdefault(ex, {
+                "original": 0, "new": 0,
+                "missing_in_new": 0, "extra_in_new": 0,
+            })["extra_in_new"] += 1
 
-        finally:
-            conn.close()
+        def _count_by_exchange(conn_fn, table, date_filter):
+            conn = conn_fn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(f"""
+                        SELECT SUBSTRING_INDEX(code, '.', -1) AS ex,
+                               COUNT(*) AS cnt
+                        FROM `future_cn`.{table}
+                        WHERE 1=1 {date_filter}
+                        GROUP BY ex
+                    """)
+                    return {r["ex"]: r["cnt"] for r in cur.fetchall()}
+            finally:
+                conn.close()
+
+        orig_counts = _count_by_exchange(self._get_conn_orig, ORIGINAL_TABLE, date_filter_orig)
+        new_counts = _count_by_exchange(self._get_conn, NEW_TABLE, date_filter_new)
+
+        for ex, cnt in orig_counts.items():
+            exchange_counts.setdefault(ex, {
+                "original": 0, "new": 0,
+                "missing_in_new": 0, "extra_in_new": 0,
+            })["original"] = cnt
+        for ex, cnt in new_counts.items():
+            exchange_counts.setdefault(ex, {
+                "original": 0, "new": 0,
+                "missing_in_new": 0, "extra_in_new": 0,
+            })["new"] = cnt
+
+        # --- (C) Field-level comparison on matched records ---
+        fields = [
+            "open", "high", "low", "close", "volume",
+            "amt", "oi", "settle", "maxup", "maxdown",
+            "long_margin", "short_margin", "minoq", "maxoq",
+        ]
+        field_results: Dict[str, Dict[str, CompareResult]] = {}
+
+        if matched_set:
+            code_date_list = sorted(matched_set)
+            col_list = ", ".join(fields)
+            for cd_start in range(0, len(code_date_list), 500):
+                batch = code_date_list[cd_start:cd_start + 500]
+                # Query both tables with case-insensitive match
+                conditions = " OR ".join([
+                    f"(UPPER(code) = '{c}' AND date = '{d}')"
+                    for c, d in batch
+                ])
+
+                # Fetch original table data from 201
+                orig_data = {}
+                orig_conn = self._get_conn_orig()
+                try:
+                    with orig_conn.cursor() as cur:
+                        cur.execute(f"""
+                            SELECT code, date, {col_list}
+                            FROM `future_cn`.{ORIGINAL_TABLE}
+                            WHERE {conditions}
+                        """)
+                        for row in cur.fetchall():
+                            k = (row["code"].upper(), str(row["date"]))
+                            orig_data[k] = row
+                finally:
+                    orig_conn.close()
+
+                # Fetch new table data from 202
+                new_data = {}
+                new_conn = self._get_conn()
+                try:
+                    with new_conn.cursor() as cur:
+                        cur.execute(f"""
+                            SELECT code, date, {col_list}
+                            FROM `future_cn`.{NEW_TABLE}
+                            WHERE {conditions}
+                        """)
+                        for row in cur.fetchall():
+                            k = (row["code"].upper(), str(row["date"]))
+                            new_data[k] = row
+                finally:
+                    new_conn.close()
+
+                for key in batch:
+                    o_row = orig_data.get(key)
+                    n_row = new_data.get(key)
+                    if not o_row or not n_row:
+                        continue
+                    code = key[0]
+                    date = self._format_date(key[1])
+                    ex = code.rsplit(".", 1)[-1] if "." in code else "?"
+
+                    if ex not in field_results:
+                        field_results[ex] = {
+                            f: CompareResult(f) for f in fields
+                        }
+
+                    for field in fields:
+                        ov = o_row.get(field)
+                        nv = n_row.get(field)
+                        cr = field_results[ex][field]
+
+                        if ov is None and nv is None:
+                            continue
+                        if ov is None and nv is not None:
+                            cr.total_missing_original += 1
+                            continue
+                        if ov is not None and nv is None:
+                            cr.total_missing_new += 1
+                            oa = o_row.get("amt")
+                            if field == "amt" or oa is None or float(oa) != 0:
+                                cr.total_abnormal_missing_new += 1
+                            continue
+
+                        ov = float(ov)
+                        nv = float(nv)
+                        diff_val = abs(ov - nv)
+                        max_abs = max(abs(ov), abs(nv))
+                        deviation = diff_val / max_abs * 100 if max_abs > 0 else 0.0
+
+                        if deviation > tolerance:
+                            cr.total_diff += 1
+                            cr.max_deviation = max(cr.max_deviation, deviation)
+                            if len(cr.sample_diffs) < 10:
+                                cr.sample_diffs.append({
+                                    "code": code,
+                                    "date": date,
+                                    "original": round(ov, 4),
+                                    "new": round(nv, 4),
+                                    "deviation_pct": round(deviation, 4),
+                                })
+                        else:
+                            cr.total_matched += 1
 
         result = {
             "exchange_counts": exchange_counts,
