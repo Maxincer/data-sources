@@ -68,6 +68,16 @@ RECIPIENTS="fisher@wendao.fund,chendingzhong@wendao.fund"
     ${RUN_WRITER} 2>&1 || echo "[WARN] Writer completed with errors"
 
     echo "[$(date '+%F %T')] Step 3/3: Reporting + email..."
+
+    # 等待至 16:40，确保 201 上的 Wind 数据已更新
+    NOW_S=$(date +%s)
+    TARGET_S=$(date -d "16:40" +%s 2>/dev/null || date -d "16:40:00" +%s)
+    if [ "$NOW_S" -lt "$TARGET_S" ]; then
+        WAIT=$((TARGET_S - NOW_S))
+        echo "[$(date '+%F %T')] 等待 ${WAIT}s 至 16:40..."
+        sleep "$WAIT"
+    fi
+
     ${RUN_REPORTER} --sender "${SENDER}" --recipients "${RECIPIENTS}" 2>&1
 
     STATUS=$?
