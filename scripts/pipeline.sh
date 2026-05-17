@@ -38,17 +38,11 @@ if [ -n "${DEV_MODE}" ]; then
     RUN_FETCHER="python3 -m data_sources.fetcher run ${TRADE_DATE}"
     RUN_WRITER="python3 -m data_sources.writer --date ${TRADE_DATE}"
     RUN_REPORTER="python3 -m data_sources.reporter ${TRADE_DATE}"
-elif command -v fetcher &> /dev/null; then
+else
     # 生产模式：通过 pipx 安装的命令已在 PATH
     RUN_FETCHER="fetcher run ${TRADE_DATE}"
     RUN_WRITER="writer --date ${TRADE_DATE}"
     RUN_REPORTER="reporter ${TRADE_DATE}"
-else
-    # 后备开发模式：未安装时自动使用源码
-    export PYTHONPATH="src:libs/mxz-utils/src"
-    RUN_FETCHER="python3 -m data_sources.fetcher run ${TRADE_DATE}"
-    RUN_WRITER="python3 -m data_sources.writer --date ${TRADE_DATE}"
-    RUN_REPORTER="python3 -m data_sources.reporter ${TRADE_DATE}"
 fi
 
 # ---- 密码与收件人 ----
