@@ -450,16 +450,14 @@ def _fix_margin_inherit(
 
 
 def fill_zero_volume_close(records: list) -> list:
-    """零交易合约的 close 回退为 settle。
+    """close 为空时回退为 settle。
 
-    日行情文件只包含有交易的合约。未列出的零交易合约
-    没有 close 值，但原表中它们的 close = settle。
+    即使有少量成交，临近到期合约的 OHLC 也可能为 None，
+    但 Wind 等数据源会用 settle 填充 close。
     """
     for rec in records:
         if rec.get("close") is None and rec.get("settle") is not None:
-            vol = rec.get("volume")
-            if vol is None or vol == 0.0:
-                rec["close"] = rec["settle"]
+            rec["close"] = rec["settle"]
     return records
 
 

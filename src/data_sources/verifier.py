@@ -458,7 +458,7 @@ class Verifier:
         nulls = [f for f in ("open", "high", "low") if rec.get(f) is None]
         if len(nulls) == 3 and rec.get("close") is not None:
             vol = rec.get("volume") or 0
-            if vol < 300:
+            if vol < 500:
                 return "✅ 可允许: 量小无OHLC"
         return "⚠️ 需核查"
 
