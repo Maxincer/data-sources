@@ -18,7 +18,7 @@
 |--------|-------|------|-------------|------|
 | INE | `/publicnotice/` | 🟡 JS渲染 | ✅ 可达 | 列表页需JS，单页直接访问 |
 | SHFE | `/publicnotice/` | 🟡 JS渲染 | ✅ 可达 | 同上，同一套CMS |
-| DCE | `/dce/channel/list/244.html` | ❌ 412 | ? | 被CDN拦截 |
+| DCE | 公告列表页 | ❌ 全站反爬 | ❌ 单页也反爬 | 仅搜索引擎可索引 |
 | CZCE | 公告列表页 | ❌ 412 | ? | 被CDN拦截 |
 | CFFEX | `/cn/jysgg.html` | 🟡 JS渲染 | ? | 需进一步测试 |
 | GFEX | `/gfex/tzts/list_yw.shtml` | 🟡 JS渲染 | ? | 同CFFEX |
