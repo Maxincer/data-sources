@@ -31,3 +31,4 @@ logs/
 # Data: keep only trade_dates.txt
 /data/*
 !/data/trade_dates.txt
+.venv*

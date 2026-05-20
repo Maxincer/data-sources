@@ -34,10 +34,11 @@ fi
 # ---- 环境自适应 ----
 if [ -n "${DEV_MODE}" ]; then
     # 开发模式：强制使用本地源码（即使已安装）
+    PIP="$(dirname "$0")/../.venv/bin/python3"
     export PYTHONPATH="src:libs/mxz-utils/src"
-    RUN_FETCHER="python3 -m data_sources.fetcher run ${TRADE_DATE}"
-    RUN_WRITER="python3 -m data_sources.writer --date ${TRADE_DATE}"
-    RUN_REPORTER="python3 -m data_sources.reporter ${TRADE_DATE}"
+    RUN_FETCHER="${PIP} -m data_sources.fetcher run ${TRADE_DATE}"
+    RUN_WRITER="${PIP} -m data_sources.writer --date ${TRADE_DATE}"
+    RUN_REPORTER="${PIP} -m data_sources.reporter ${TRADE_DATE}"
 else
     # 生产模式：通过 pipx 安装的命令已在 PATH
     RUN_FETCHER="fetcher run ${TRADE_DATE}"
