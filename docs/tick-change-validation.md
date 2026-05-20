@@ -5,9 +5,10 @@
 - **生效日期**: 2026-05-11
 - **旧 tick**: 0.1 点
 - **新 tick**: 0.5 点
-- **规则来源**: 上海国际能源交易中心通知（经中信期货转发）
-  - 转发链接: https://www.citicsf.com/e-futures/content/000204/822721
-  - ⚠️ 此为第三方转发页，非交易所原始链接，如失效需在 INE 官网查找原始公告
+- **规则来源**: 上海国际能源交易中心
+  - 实施通知: https://www.ine.cn/publicnotice/notice/202601/t20260116_830126.html
+  - 合约规格: https://www.ine.cn/products/futures/index_f/ec_f/standard_ec_f/202601/t20260121_830171.html
+  - 修订案公告: https://www.shfe.com.cn/publicnotice/notice/202601/t20260116_830124.html
 
 ### 交易所规定的调整规则
 
