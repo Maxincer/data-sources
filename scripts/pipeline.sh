@@ -42,17 +42,15 @@ if [ -n "${DEV_MODE}" ]; then
     RUN_FETCHER="${PIP} -m data_sources.fetcher run ${TRADE_DATE}"
     RUN_WRITER="${PIP} -m data_sources.writer --date ${TRADE_DATE}"
     RUN_REPORTER="${PIP} -m data_sources.reporter ${TRADE_DATE}"
-    RUN_ANNCHECK="${PIP} scripts/check_announcements.py"
 else
     # 生产模式：通过 pipx 安装的命令已在 PATH
     RUN_FETCHER="fetcher run ${TRADE_DATE}"
     RUN_WRITER="writer --date ${TRADE_DATE}"
     RUN_REPORTER="reporter ${TRADE_DATE}"
-    RUN_ANNCHECK="check_announcements"
 fi
 
 # ---- 密码与收件人 ----
-SMTP_PASSWORD="reSZ2qAaKiAgyu5Q"
+SMTP_PASSWORD="***"
 export SMTP_PASSWORD
 SENDER="mxz@wendao.fund"
 RECIPIENTS="fisher@wendao.fund,chendingzhong@wendao.fund"
@@ -79,8 +77,5 @@ fi
 
 ${RUN_REPORTER} --sender "${SENDER}" --recipients "${RECIPIENTS}" 2>&1
 
-
-echo "[$(date '+%F %T')] Step 4/4: Announcement check..."
-${RUN_ANNCHECK} 2>&1 || echo "[WARN] Announcement check completed with errors"
 STATUS=$?
 echo "[$(date '+%F %T')] ===== pipeline finished (status=${STATUS}) ====="
