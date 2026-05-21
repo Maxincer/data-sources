@@ -50,10 +50,10 @@ else
 fi
 
 # ---- 密码与收件人 ----
-SMTP_PASSWORD="***"
+SMTP_PASSWORD="NBnDH84qZHZWFrTC"
 export SMTP_PASSWORD
-SENDER="mxz@wendao.fund"
-RECIPIENTS="fisher@wendao.fund,chendingzhong@wendao.fund"
+SENDER="robot@wendao.fund"
+RECIPIENTS="fisher@wendao.fund,chendingzhong@wendao.fund,mxz@wendao.fund"
 
 # ---- 执行管线 ----
 echo "[$(date '+%F %T')] ===== pipeline started for ${TRADE_DATE} ====="
