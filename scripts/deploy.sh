@@ -28,7 +28,9 @@ if ! command -v pipx &>/dev/null; then
 fi
 
 # ---- Install / upgrade (force overwrites existing) ----
-pipx install --force "${WHL}"
+# --system-site-packages: allow access to system-installed packages
+# (cpp_py.so, etc.) while keeping pip deps isolated in the venv
+pipx install --system-site-packages --force "${WHL}"
 
 # ---- Playwright browser (chromium only) ----
 echo "[deploy] 🌐 Installing playwright chromium..."

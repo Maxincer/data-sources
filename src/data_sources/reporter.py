@@ -79,11 +79,17 @@ class Reporter:
 
     def generate_daily(
         self, date_str: str, *,
+        skip_table_compare: bool = False,
         email: bool = False,
         sender: Optional[str] = None,
         email_recipients: Optional[list[str]] = None,
     ) -> None:
         """Generate daily data verification report.
+
+        Args:
+            date_str: 交易日 YYYYMMDD
+            skip_table_compare: True=阶段二，跳过两表对比，仅做 Wind API 交叉验证
+            email: 是否同时发送邮件
 
         一次计算，两个渠道：
           1. 飞书（默认）
@@ -92,15 +98,42 @@ class Reporter:
         v = Verifier(self.logger)
         stats = v.get_field_stats(date_str)
         abnormal = v.get_abnormal_nulls(date_str)
-        comp = v.compare_all(target_date=date_str)
-        ec = comp.get("exchange_counts", {})
-        fd = comp.get("field_diffs", {})
 
         feishu_sections = [
             self._build_file_size_section(date_str),
             self._build_field_stats_section(stats, abnormal),
-            self._build_comparison_section(comp, date_str),
         ]
+
+        ec = {}
+        fd = {}
+        comp = {}
+
+        if not skip_table_compare:
+            # Phase 1: 两表对比 + Wind API
+            comp = v.compare_all(target_date=date_str)
+            ec = comp.get("exchange_counts", {})
+            fd = comp.get("field_diffs", {})
+            feishu_sections.append(
+                self._build_comparison_section(comp, date_str)
+            )
+        else:
+            # Phase 2: 仅 Wind API 交叉验证
+            self.logger.info("skip_table_compare=True, skipping table comparison")
+
+        # Always run Wind API cross-validation
+        wind_comp = v.compare_with_wind_api(date_str)
+        if wind_comp.get("wind_available"):
+            feishu_sections.append(
+                self._build_wind_comparison_section(wind_comp)
+            )
+            if email:
+                self.logger.info(
+                    "Wind cross-validation: %d/%d matched, %d diffs",
+                    wind_comp.get("matched_contracts", 0),
+                    wind_comp.get("total_contracts", 0),
+                    len(wind_comp.get("contract_diffs", [])),
+                )
+
         self._send_feishu_markdown(
             f"📊 数据验证报告 {date_str}",
             "\n\n---\n\n".join(feishu_sections),
@@ -112,6 +145,7 @@ class Reporter:
             self._smtp_send(
                 date_str, stats, abnormal, ec, fd, comp,
                 sender=sender_addr, recipients=recipients,
+                wind_comp=wind_comp,
             )
 
         self.logger.info("Report for %s sent.", date_str)
@@ -128,7 +162,8 @@ class Reporter:
         )
 
     def _smtp_send(self, date_str, stats, abnormal, ec, fd, comp,
-                   sender=None, recipients=None):
+                   sender=None, recipients=None,
+                   wind_comp: Optional[dict] = None):
         """发送邮件（SMTP），使用已计算好的数据。"""
         password = os.environ.get("SMTP_PASSWORD")
         if not password:
@@ -142,11 +177,19 @@ class Reporter:
         html_parts = [
             self._email_header(date_str),
             self._email_file_size_section(date_str),
-            self._email_coverage(ec, comp, date_str),
-            self._email_field_stats(stats, abnormal),
-            self._email_field_diffs(fd),
-            self._email_footer(),
         ]
+        # Phase 1: table comparison
+        if ec or comp:
+            html_parts.append(self._email_coverage(ec, comp, date_str))
+            html_parts.append(self._email_field_diffs(fd))
+        # Always: field stats
+        html_parts.append(self._email_field_stats(stats, abnormal))
+        # Always: Wind cross-validation
+        if wind_comp and wind_comp.get("wind_available"):
+            html_parts.append(
+                self._email_wind_section(wind_comp)
+            )
+        html_parts.append(self._email_footer())
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = (
@@ -345,6 +388,73 @@ class Reporter:
                 lines.append("✅ 字段无差异")
         except Exception as e:
             lines.append(f"**对比失败**: {e}")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_wind_comparison_section(wind_comp: dict) -> str:
+        """Wind API cross-validation section for Feishu."""
+        if not wind_comp.get("wind_available"):
+            return "⚠️ Wind API 不可用，跳过交叉验证"
+
+        lines = []
+        lines.append(
+            f"**Wind API 交叉验证** "
+            f"({wind_comp['matched_contracts']}/"
+            f"{wind_comp['total_contracts']} 合约)"
+        )
+        lines.append("")
+
+        field_stats = wind_comp.get("field_stats", {})
+        has_diff = any(s["diff"] > 0 for s in field_stats.values())
+
+        if not has_diff and not wind_comp.get("wind_unavailable"):
+            lines.append("✅ 全部字段完全一致")
+            return "\n".join(lines)
+
+        lines.append("**分字段差异统计**:")
+        lines.append("")
+        lines.append(
+            "| 字段 | 匹配 | 差异 | 最大偏差 | 均值偏差 |"
+        )
+        lines.append(
+            "| :--- | ---: | ---: | ---: | ---: |"
+        )
+        for fname, s in field_stats.items():
+            avg_dev = (
+                s["sum_deviation"] / s["diff"]
+                if s["diff"] > 0 else 0.0
+            )
+            icon = "🔴" if s["diff"] > 0 else "✅"
+            lines.append(
+                f"| {icon} {fname} | {s['matched']} | {s['diff']} |"
+                f" {s['max_deviation']:.2f}% |"
+                f" {avg_dev:.2f}% |"
+            )
+
+        contract_diffs = wind_comp.get("contract_diffs", [])
+        if contract_diffs:
+            lines.append("")
+            lines.append("**差异明细** (最多 20 条):")
+            for d in contract_diffs[:20]:
+                lines.append(
+                    f"  → {d['code']}.{d['field']}: "
+                    f"ours={d['ours']} wind={d['wind']}"
+                    f" 偏差 {d['deviation_pct']:.2f}%"
+                )
+            if len(contract_diffs) > 20:
+                lines.append(f"  ... 还有 {len(contract_diffs) - 20} 条")
+
+        unavailable = wind_comp.get("wind_unavailable", [])
+        if unavailable:
+            lines.append("")
+            lines.append(
+                f"**Wind 无数据** ({len(unavailable)} 个):"
+            )
+            for c in unavailable[:10]:
+                lines.append(f"  ⚠️ {c}")
+            if len(unavailable) > 10:
+                lines.append(f"  ... 还有 {len(unavailable) - 10} 个")
 
         return "\n".join(lines)
 
@@ -598,6 +708,79 @@ class Reporter:
         return "\n".join(parts)
 
     @staticmethod
+    def _email_wind_section(wind_comp: dict) -> str:
+        """Wind API 交叉验证邮件章节 (HTML)."""
+        parts = ['<h2>🌐 Wind API 交叉验证</h2>']
+        mc = wind_comp.get("matched_contracts", 0)
+        tc = wind_comp.get("total_contracts", 0)
+        parts.append(
+            f'<p>匹配: {mc}/{tc} 合约</p>'
+        )
+
+        field_stats = wind_comp.get("field_stats", {})
+        has_diff = any(s["diff"] > 0 for s in field_stats.values())
+        if not has_diff and not wind_comp.get("wind_unavailable"):
+            parts.append('<p>✅ 全部字段完全一致</p>')
+            return "\n".join(parts)
+
+        parts.append('<h3>分字段差异统计</h3>')
+        parts.append(
+            '<table border="1" cellpadding="6" cellspacing="0"'
+            ' style="border-collapse:collapse;">'
+        )
+        parts.append(
+            '<tr style="background:#f5f5f5;">'
+            '<th>字段</th><th>匹配</th><th>差异</th>'
+            '<th>最大偏差</th><th>均值偏差</th></tr>'
+        )
+        for fname, s in field_stats.items():
+            avg_dev = (
+                s["sum_deviation"] / s["diff"]
+                if s["diff"] > 0 else 0.0
+            )
+            icon = "🔴" if s["diff"] > 0 else "✅"
+            parts.append(
+                f'<tr><td>{icon} {fname}</td>'
+                f'<td style="text-align:right">{s["matched"]}</td>'
+                f'<td style="text-align:right">{s["diff"]}</td>'
+                f'<td style="text-align:right">{s["max_deviation"]:.2f}%</td>'
+                f'<td style="text-align:right">{avg_dev:.2f}%</td></tr>'
+            )
+        parts.append('</table>')
+
+        contract_diffs = wind_comp.get("contract_diffs", [])
+        if contract_diffs:
+            parts.append('<h3>差异明细 (最多 20 条)</h3>')
+            parts.append('<ul>')
+            for d in contract_diffs[:20]:
+                parts.append(
+                    f'<li>{d["code"]}.{d["field"]}: '
+                    f'ours={d["ours"]} wind={d["wind"]} '
+                    f'偏差 {d["deviation_pct"]:.2f}%</li>'
+                )
+            if len(contract_diffs) > 20:
+                parts.append(
+                    f'<li>... 还有 {len(contract_diffs) - 20} 条</li>'
+                )
+            parts.append('</ul>')
+
+        unavailable = wind_comp.get("wind_unavailable", [])
+        if unavailable:
+            parts.append(
+                f'<p>Wind 无数据 ({len(unavailable)} 个)</p>'
+            )
+            parts.append('<ul>')
+            for c in unavailable[:10]:
+                parts.append(f'<li>⚠️ {c}</li>')
+            if len(unavailable) > 10:
+                parts.append(
+                    f'<li>... 还有 {len(unavailable) - 10} 个</li>'
+                )
+            parts.append('</ul>')
+
+        return "\n".join(parts)
+
+    @staticmethod
     def _email_footer() -> str:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return (
@@ -679,6 +862,10 @@ def main():
                         help="Sender email address")
     parser.add_argument("--recipients", default=None,
                         help="Comma-separated recipient email addresses")
+    parser.add_argument(
+        "--skip-table-compare", action="store_true",
+        help="Skip comparison with Wind original table (phase 2 only)",
+    )
     args = parser.parse_args()
 
     date_str = (
@@ -696,6 +883,7 @@ def main():
     r = Reporter()
     r.generate_daily(
         date_str,
+        skip_table_compare=args.skip_table_compare,
         email=send_email,
         sender=args.sender,
         email_recipients=recipients,

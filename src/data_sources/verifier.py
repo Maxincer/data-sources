@@ -692,6 +692,247 @@ class Verifier:
         }
         return result
 
+    # -----------------------------------------------------------------
+    # Wind API cross-validation (phase 1 & 2)
+    # -----------------------------------------------------------------
+
+    def compare_with_wind_api(
+        self,
+        target_date: str,
+        table: str = NEW_TABLE,
+        fields: Optional[list[str]] = None,
+    ) -> dict:
+        """Compare our table data against Wind API for cross-validation.
+
+        Queries `t_futures` for active contracts, fetches Wind WSD data
+        for each, then compares field-by-field against our table.
+
+        Args:
+            target_date: YYYYMMDD
+            table: our table to check against
+            fields: fields to compare, default = all 12 price fields
+
+        Returns:
+            {
+                "wind_available": bool,
+                "total_contracts": int,
+                "matched_contracts": int,
+                "contract_diffs": [{code, field, ours, wind, diff_pct}],
+                "field_stats": {field: {matched, diff, max_deviation}},
+                "wind_unavailable": [],  # contracts Wind had no data for
+                "summary": str,
+            }
+        """
+        if fields is None:
+            fields = [
+                "open", "high", "low", "close", "volume",
+                "amt", "oi", "settle", "maxup", "maxdown",
+                "long_margin", "short_margin",
+            ]
+
+        from data_sources.wind_client import WindClient
+
+        client = WindClient()
+        if not client.available:
+            return {
+                "wind_available": False,
+                "summary": "⚠️ Wind API 不可用，跳过交叉验证",
+            }
+
+        dt = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:8]}"
+
+        # 1) Fetch active contracts from t_futures
+        conn = self._get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT code
+                    FROM future_cn.t_futures
+                    WHERE ipo_date <= %s AND lasttrade_date >= %s
+                    ORDER BY code
+                """, (dt, dt))
+                all_codes = [r["code"] for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+        # 2) Fetch our data for target_date
+        our_data: dict[str, dict] = {}
+        code_col = "code"
+        conn = self._get_conn()
+        try:
+            with conn.cursor() as cur:
+                col_list = ", ".join(["code"] + fields)
+                cur.execute(f"""
+                    SELECT {col_list}
+                    FROM future_cn.{table}
+                    WHERE date = %s
+                """, (dt,))
+                for row in cur.fetchall():
+                    code = row["code"]
+                    our_data[code] = {
+                        f: row[f] for f in fields
+                    }
+        finally:
+            conn.close()
+
+        # 3) For each contract, fetch Wind data & compare
+        field_stats: dict[str, dict] = {
+            f: {"matched": 0, "diff": 0, "total": 0,
+                "sum_deviation": 0.0, "max_deviation": 0.0,
+                "samples": []}
+            for f in fields
+        }
+        contract_diffs: list[dict] = []
+        wind_unavailable: list[str] = []
+        no_match_count = 0
+
+        for code in all_codes:
+            wind = client.get_wsd(code, target_date, fields)
+            if wind is None:
+                wind_unavailable.append(code)
+                continue
+
+            ours = our_data.get(code)
+            if ours is None:
+                no_match_count += 1
+                continue
+
+            for f in fields:
+                ov = ours.get(f)
+                wv = wind.get(f)
+                field_stats[f]["total"] += 1
+
+                if ov is None or wv is None:
+                    field_stats[f]["diff"] += 1
+                    continue
+
+                try:
+                    ov = float(ov)
+                    wv = float(wv)
+                except (TypeError, ValueError):
+                    field_stats[f]["diff"] += 1
+                    continue
+
+                if ov == 0 and wv == 0:
+                    field_stats[f]["matched"] += 1
+                    continue
+
+                max_abs = max(abs(ov), abs(wv))
+                if max_abs == 0:
+                    field_stats[f]["matched"] += 1
+                    continue
+
+                deviation = abs(ov - wv) / max_abs * 100
+
+                if deviation > 0.01:  # tolerance 0.01%
+                    field_stats[f]["diff"] += 1
+                    field_stats[f]["sum_deviation"] += deviation
+                    if deviation > field_stats[f]["max_deviation"]:
+                        field_stats[f]["max_deviation"] = deviation
+                    if len(field_stats[f]["samples"]) < 10:
+                        field_stats[f]["samples"].append({
+                            "code": code,
+                            "ours": ov,
+                            "wind": wv,
+                            "deviation_pct": round(deviation, 4),
+                        })
+                    contract_diffs.append({
+                        "code": code,
+                        "field": f,
+                        "ours": ov,
+                        "wind": wv,
+                        "deviation_pct": round(deviation, 4),
+                    })
+                else:
+                    field_stats[f]["matched"] += 1
+
+        matched_count = len(all_codes) - len(wind_unavailable) - no_match_count
+        summary = self._format_wind_summary(
+            target_date, all_codes, matched_count,
+            wind_unavailable, field_stats, contract_diffs,
+        )
+
+        return {
+            "wind_available": True,
+            "total_contracts": len(all_codes),
+            "wind_unavailable": wind_unavailable,
+            "matched_contracts": matched_count,
+            "no_match_in_table": no_match_count,
+            "contract_diffs": contract_diffs,
+            "field_stats": field_stats,
+            "summary": summary,
+        }
+
+    @staticmethod
+    def _format_wind_summary(
+        target_date: str,
+        all_codes: list[str],
+        matched_count: int,
+        wind_unavailable: list[str],
+        field_stats: dict,
+        contract_diffs: list[dict],
+    ) -> str:
+        """Format Wind API cross-validation summary (plain text)."""
+        lines = []
+        lines.append(f"{'=' * 80}")
+        lines.append(f"  Wind API 交叉验证报告: {target_date}")
+        lines.append(f"{'=' * 80}")
+        lines.append(f"")
+        lines.append(f"  合约总数: {len(all_codes)}")
+        lines.append(f"  匹配合约: {matched_count}")
+        if wind_unavailable:
+            lines.append(f"  Wind 无数据: {len(wind_unavailable)}")
+
+        has_diff = any(s["diff"] > 0 for s in field_stats.values())
+        if not has_diff and not wind_unavailable:
+            lines.append(f"  ✅ 全部字段完全一致")
+            lines.append(f"")
+            lines.append(f"{'=' * 80}")
+            return "\n".join(lines)
+
+        lines.append(f"")
+        lines.append(f"  分字段差异统计:")
+        lines.append(
+            f"  {'字段':<14s} | {'匹配':>6s} | {'差异':>4s} | "
+            f"{'最大偏差':>8s} | {'均值偏差':>8s}"
+        )
+        lines.append(f"  {'-' * 52}")
+        for fname, s in field_stats.items():
+            avg_dev = (
+                s["sum_deviation"] / s["diff"]
+                if s["diff"] > 0 else 0.0
+            )
+            icon = "🔴" if s["diff"] > 0 else "✅"
+            lines.append(
+                f"  {icon} {fname:<12s} | {s['matched']:>6d} | "
+                f"{s['diff']:>4d} | {s['max_deviation']:>7.2f}% | "
+                f"{avg_dev:>7.2f}%"
+            )
+
+        if contract_diffs:
+            lines.append(f"")
+            lines.append(f"  差异明细 (最多 20 条):")
+            for d in contract_diffs[:20]:
+                lines.append(
+                    f"    → {d['code']}.{d['field']}: "
+                    f"ours={d['ours']} wind={d['wind']} "
+                    f"偏差={d['deviation_pct']:.2f}%"
+                )
+            if len(contract_diffs) > 20:
+                lines.append(f"    ... 还有 {len(contract_diffs) - 20} 条")
+
+        if wind_unavailable:
+            lines.append(f"")
+            lines.append(f"  Wind 无数据的合约 ({len(wind_unavailable)}):")
+            for c in wind_unavailable[:15]:
+                lines.append(f"    ⚠️ {c}")
+            if len(wind_unavailable) > 15:
+                lines.append(f"    ... 还有 {len(wind_unavailable) - 15} 个")
+
+        lines.append(f"")
+        lines.append(f"{'=' * 80}")
+        return "\n".join(lines)
+
     def _format_summary(
         self,
         exchange_counts: Dict,
