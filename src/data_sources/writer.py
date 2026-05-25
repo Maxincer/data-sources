@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Writer: parse raw data and upsert into MySQL t_futures_info_exchange."""
+"""Writer: parse raw data and upsert into MySQL."""
 
 import argparse
 import logging
@@ -86,7 +86,8 @@ def _ensure_prev_dce_data(date_str: str):
         logger.warning("下载失败: %s", e)
 
 
-def write_trade_date(date_str: str, dry_run: bool = False):
+def write_trade_date(date_str: str, dry_run: bool = False,
+                      config_override: dict | None = None):
     """Parse and write data for a specific trade date."""
     _ensure_prev_dce_data(date_str)
     prev_date = _prev_trading_day(date_str)
@@ -127,13 +128,14 @@ def write_trade_date(date_str: str, dry_run: bool = False):
     logger.info("目标日期记录数: %s", len(target_records))
     if dry_run:
         return len(target_records), [s.stats_summary for s in stats_list]
-    create_table()
-    written = upsert_records(target_records)
+    create_table(config_override)
+    written = upsert_records(target_records, config_override)
     logger.info("写入完成: %s 条", written)
     return written, [s.stats_summary for s in stats_list]
 
 
-def write_all(dry_run: bool = False):
+def write_all(dry_run: bool = False,
+              config_override: dict | None = None):
     """Parse and write all raw data files."""
     records = []
     stats_list = []
@@ -166,8 +168,8 @@ def write_all(dry_run: bool = False):
     logger.info("写入总记录数: %s", len(records))
     if dry_run:
         return len(records), [s.stats_summary for s in stats_list]
-    create_table()
-    written = upsert_records(records)
+    create_table(config_override)
+    written = upsert_records(records, config_override)
     logger.info("写入完成: %s 条", written)
     return written, [s.stats_summary for s in stats_list]
 
@@ -181,12 +183,39 @@ def main():
         "--dry-run", action="store_true",
         help="Parse only, do not write to DB"
     )
+    parser.add_argument(
+        "--host", default=None,
+        help="MySQL host (default: 192.168.1.202)"
+    )
+    parser.add_argument(
+        "--port", type=int, default=None,
+        help="MySQL port (default: 3306)"
+    )
+    parser.add_argument(
+        "--db", default=None,
+        help="MySQL database name (default: future_cn)"
+    )
+    parser.add_argument(
+        "--table", default=None,
+        help="MySQL table name (default: t_futures_info_exchange)"
+    )
     args = parser.parse_args()
 
+    config_override = {
+        k: v for k, v in {
+            "host": args.host,
+            "port": args.port,
+            "database": args.db,
+            "table": args.table,
+        }.items() if v is not None
+    }
+
     if args.date:
-        written, stats = write_trade_date(args.date, args.dry_run)
+        written, stats = write_trade_date(
+            args.date, args.dry_run, config_override
+        )
     else:
-        written, stats = write_all(args.dry_run)
+        written, stats = write_all(args.dry_run, config_override)
 
     action = "[DRY RUN]" if args.dry_run else ""
     print(f"{action} Records written: {written}")

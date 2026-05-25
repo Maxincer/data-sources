@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Data pipeline – works in both dev (DEV_MODE=1) and prod (pipx installed)
+# Data pipeline – works in both dev (DEV_MODE=1) and prod (pip install --user)
 # Usage:
 #   Production / crontab:          bash scripts/pipeline.sh [TRADE_DATE]
 #   Development:          DEV_MODE=1 bash scripts/pipeline.sh [TRADE_DATE]
@@ -7,7 +7,7 @@
 # Log output goes to stdout/stderr. crontab handles redirection:
 #   45 16 * * * DEV_MODE=1 /path/scripts/pipeline.sh >> /mnt/e/logs/cron.log 2>&1
 
-# Ensure pipx-installed commands are found (crontab may lack this)
+# Ensure ~/.local/bin is on PATH (crontab may lack this)
 export PATH="$HOME/.local/bin:$PATH"
 
 # Resolve project root (works if script is in <project>/scripts/)
@@ -33,6 +33,21 @@ if [ "$CURRENT_HM" -lt 1627 ]; then
     exit 0
 fi
 
+# ---- 目标库参数（可通过环境变量覆盖） ----
+# 阶段一（默认）：写 exchange 过渡表
+# 阶段二：WRITER_TABLE=t_futures_info  WRITER_HOST=192.168.1.27  WRITER_DB=future_cn
+WRITER_HOST="${WRITER_HOST:-}"
+WRITER_DB="${WRITER_DB:-}"
+WRITER_TABLE="${WRITER_TABLE:-}"
+WRITER_OPTS=""
+[ -n "$WRITER_HOST" ]  && WRITER_OPTS="$WRITER_OPTS --host $WRITER_HOST"
+[ -n "$WRITER_DB" ]    && WRITER_OPTS="$WRITER_OPTS --db $WRITER_DB"
+[ -n "$WRITER_TABLE" ] && WRITER_OPTS="$WRITER_OPTS --table $WRITER_TABLE"
+
+# 阶段二设置 SKIP_TABLE_COMPARE=1 跳过两表对比
+REPORTER_OPTS=""
+[ -n "${SKIP_TABLE_COMPARE:-}" ] && REPORTER_OPTS="--skip-table-compare"
+
 # ---- 环境自适应 ----
 if [ -n "${DEV_MODE}" ]; then
     # 开发模式：强制使用本地源码（即使已安装）
@@ -40,12 +55,12 @@ if [ -n "${DEV_MODE}" ]; then
     export PYTHONPATH="src:libs/mxz-utils/src"
     export LD_LIBRARY_PATH="$HOME/.local/chrome-libs"
     RUN_FETCHER="${PIP} -m data_sources.fetcher run ${TRADE_DATE}"
-    RUN_WRITER="${PIP} -m data_sources.writer --date ${TRADE_DATE}"
+    RUN_WRITER="${PIP} -m data_sources.writer --date ${TRADE_DATE}${WRITER_OPTS}"
     RUN_REPORTER="${PIP} -m data_sources.reporter ${TRADE_DATE}"
 else
-    # 生产模式：通过 pipx 安装的命令已在 PATH
+    # 生产模式：pip install --user，命令在 ~/.local/bin
     RUN_FETCHER="fetcher run ${TRADE_DATE}"
-    RUN_WRITER="writer --date ${TRADE_DATE}"
+    RUN_WRITER="writer --date ${TRADE_DATE}${WRITER_OPTS}"
     RUN_REPORTER="reporter ${TRADE_DATE}"
 fi
 
@@ -75,7 +90,7 @@ if [ "$NOW_S" -lt "$TARGET_S" ]; then
     sleep "$WAIT"
 fi
 
-${RUN_REPORTER} --sender "${SENDER}" --recipients "${RECIPIENTS}" 2>&1
+${RUN_REPORTER} --sender "${SENDER}" --recipients "${RECIPIENTS}" ${REPORTER_OPTS} 2>&1
 
 STATUS=$?
 echo "[$(date '+%F %T')] ===== pipeline finished (status=${STATUS}) ====="

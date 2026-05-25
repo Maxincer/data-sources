@@ -6,11 +6,16 @@ MySQL database connection and upsert operations for the data pipeline.
 
 New table naming: t_futures_info_{source} where source = "exchange" (cffex, shfe, etc.)
 Or a combined table for all exchange-sourced data.
+
+All functions accept an optional config_override dict to support runtime
+parameterization (e.g. switching host/database/table for different deployment
+phases without modifying global state).
 """
 
 
 import pymysql
 
+# ---- Default config (local dev on server202) ----
 DB_CONFIG = {
     "host": "192.168.1.202",
     "user": "root",
@@ -19,16 +24,45 @@ DB_CONFIG = {
     "charset": "utf8mb4",
 }
 
-
-def get_connection():
-    """Return a pymysql connection to future_cn."""
-    return pymysql.connect(**DB_CONFIG)
-
-
 TABLE_NAME = "t_futures_info_exchange"
 
-CREATE_SQL = f"""
-CREATE TABLE IF NOT EXISTS `future_cn`.`{TABLE_NAME}` (
+
+# ---- Helpers ----
+
+
+def resolve_config(config_override: dict | None = None) -> dict:
+    """Return merged DB config, overriding defaults with provided values."""
+    cfg = dict(DB_CONFIG)
+    if config_override:
+        cfg.update({k: v for k, v in config_override.items() if v is not None})
+    return cfg
+
+
+def _table_name(config_override: dict | None = None) -> str:
+    if config_override and "table" in config_override:
+        return config_override["table"]
+    return TABLE_NAME
+
+
+def _database_name(config_override: dict | None = None) -> str:
+    cfg = resolve_config(config_override)
+    return cfg.get("database", "future_cn")
+
+
+# ---- Connection ----
+
+
+def get_connection(config_override: dict | None = None):
+    """Return a pymysql connection."""
+    cfg = resolve_config(config_override)
+    return pymysql.connect(**cfg)
+
+
+# ---- DDL ----
+
+
+CREATE_SQL_TPL = """\
+CREATE TABLE IF NOT EXISTS `{database}`.`{table}` (
   `id` int NOT NULL AUTO_INCREMENT,
   `code` varchar(128) DEFAULT NULL,
   `date` date DEFAULT NULL,
@@ -57,20 +91,26 @@ CREATE TABLE IF NOT EXISTS `future_cn`.`{TABLE_NAME}` (
 """
 
 
-def create_table():
-    """Create the exchange-sourced data table if it doesn't exist."""
-    conn = get_connection()
+def create_table(config_override: dict | None = None):
+    """Create table if it doesn't exist."""
+    db_name = _database_name(config_override)
+    tbl_name = _table_name(config_override)
+    sql = CREATE_SQL_TPL.format(database=db_name, table=tbl_name)
+    conn = get_connection(config_override)
     try:
         with conn.cursor() as cur:
-            cur.execute(CREATE_SQL)
+            cur.execute(sql)
         conn.commit()
     finally:
         conn.close()
 
 
-def upsert_records(records):
+# ---- DML ----
+
+
+def upsert_records(records, config_override: dict | None = None):
     """
-    Upsert parsed records into t_futures_info_exchange.
+    Upsert parsed records into the configured table.
 
     Each record should be a dict with keys matching the table columns.
     """
@@ -86,14 +126,16 @@ def upsert_records(records):
     update_str = ", ".join(
         [f"{c}=VALUES({c})" for c in cols if c not in ("code", "date")]
     )
+    db_name = _database_name(config_override)
+    tbl_name = _table_name(config_override)
     sql = (
-        f"INSERT INTO `future_cn`.`{TABLE_NAME}` ({column_str}) "
+        f"INSERT INTO `{db_name}`.`{tbl_name}` ({column_str}) "
         f"VALUES ({placeholders}) "
         f"ON DUPLICATE KEY UPDATE {update_str}"
     )
     from data_sources.modifier import margin_to_pct
 
-    conn = get_connection()
+    conn = get_connection(config_override)
     try:
         with conn.cursor() as cur:
             for rec in records:
@@ -119,13 +161,15 @@ def upsert_records(records):
         conn.close()
 
 
-def count_records():
-    """Return total record count in exchange table."""
-    conn = get_connection()
+def count_records(config_override: dict | None = None):
+    """Return total record count in the configured table."""
+    db_name = _database_name(config_override)
+    tbl_name = _table_name(config_override)
+    conn = get_connection(config_override)
     try:
         with conn.cursor() as cur:
             cur.execute(
-                f"SELECT COUNT(*) AS cnt FROM `future_cn`.`{TABLE_NAME}`"
+                f"SELECT COUNT(*) AS cnt FROM `{db_name}`.`{tbl_name}`"
             )
             return cur.fetchone()["cnt"]
     finally:
