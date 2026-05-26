@@ -491,3 +491,13 @@ bash scripts/pipeline.sh
 | `./logs/reporter.*.log` | Reporter 模块的 AlertLogger 日志 |
 
 日志文件按日期轮转（`HybridRotatingFileHandler`），单文件上限 100MB，保留 30 天。
+
+## 已知问题
+
+### DCE 到期合约缺少涨跌停价
+
+每月最后交易日，交易所会在当日 TradingParameters 中摘除到期合约，导致 maxup/maxdown 为 NULL。DailyMarketData 仍有行情数据（close/volume/amt/oi）。
+
+影响范围：到期月份的合约（如 5/26 为 2605 合约最后交易日），通常 5–10 个合约。这些合约在 `t_futures_info`（Wind 源）中有完整数据，两表对比会出现差异。
+
+验证：前一天（5/25）的 TradingParameters 中含有到期合约（eg2605/bz2605/jd2605/lh2605/eb2605/lg2605/pg2605），确认是到期摘牌导致。
