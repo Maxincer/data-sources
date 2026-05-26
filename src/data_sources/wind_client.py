@@ -5,7 +5,10 @@ Only available on machines with cpp_py installed (e.g. db201).
 Gracefully unavailable elsewhere.
 """
 
+import re
 from typing import Optional
+
+from data_sources.modifier import czc_to_wind_code  # noqa: F401
 
 
 class WindClient:
@@ -69,9 +72,12 @@ class WindClient:
             val = row.get(f)
             if val is not None:
                 try:
-                    out[f] = float(val)
+                    v = float(val)
                 except (TypeError, ValueError):
-                    pass
+                    continue
+                if v != v:  # NaN check (NaN != NaN)
+                    continue
+                out[f] = v
         return out if out else None
 
     def batch_wsd(

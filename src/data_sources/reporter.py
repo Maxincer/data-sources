@@ -25,7 +25,8 @@ from mxz_utils.logging_config import get_logger
 
 _FULL_FIELDS = [
     "open", "high", "low", "close", "volume", "amt", "oi",
-    "settle", "maxup", "maxdown", "long_margin", "short_margin",
+    "settle", "maxup", "maxdown", "if_basis", "long_margin", "short_margin",
+    "minoq", "maxoq",
 ]
 
 _FEISHU_WEBHOOK = (
@@ -241,26 +242,29 @@ class Reporter:
             lines.append("| 文件 | 本次(bytes) | 上次(bytes) | 变化率 |")
             lines.append("| :--- | ---: | ---: | ---: |")
             total_size = 0
+            # 去重：每个文件只取最后一次记录
+            records: dict[str, dict] = {}
             with open(metadata_file) as f:
                 for line in f:
                     try:
                         rec = json.loads(line)
                         lfn = rec.get("local_filename", "")
                         if date_str in lfn:
-                            fn = rec["local_filename"]
-                            sz = rec.get("file_size_bytes", 0)
-                            prev = rec.get("previous_size_bytes")
-                            chg = rec.get("size_change_percent")
-                            prev_str = f"{prev:,}" if prev else "N/A"
-                            chg_str = f"{chg:+.2f}%" if chg else "N/A"
-                            flag = " ⚠️" if chg and abs(chg) > 5 else ""
-                            lines.append(
-                                f"| {fn} | {sz:,} | {prev_str} |"
-                                f" {chg_str}{flag} |"
-                            )
-                            total_size += sz
+                            records[lfn] = rec
                     except Exception:
                         pass
+            for fn, rec in sorted(records.items()):
+                sz = rec.get("file_size_bytes", 0)
+                prev = rec.get("previous_size_bytes")
+                chg = rec.get("size_change_percent")
+                prev_str = f"{prev:,}" if prev else "N/A"
+                chg_str = f"{chg:+.2f}%" if chg else "N/A"
+                flag = " ⚠️" if chg and abs(chg) > 5 else ""
+                lines.append(
+                    f"| {fn} | {sz:,} | {prev_str} |"
+                    f" {chg_str}{flag} |"
+                )
+                total_size += sz
             lines.append(f"| **合计** | **{total_size:,}** | | |")
         else:
             lines.append("⚠️ 无元数据文件")
@@ -283,7 +287,8 @@ class Reporter:
                 to = s.get("total", 0) or 0
                 pct = s.get("null_pct", 0) or 0
                 abn = s.get("abnormal_null", 0) or 0
-                icon = "✅" if pct == 0 else ("🟡" if pct < 50 else "🔴")
+                ok_rate = (to - abn) / to * 100 if to > 0 else 100
+                icon = "✅" if abn == 0 else ("🟡" if ok_rate >= 90 else "🔴")
                 lines.append(
                     f"| {icon} {field} | {nn}/{to} | {pct}% | {abn} |"
                 )
@@ -352,6 +357,9 @@ class Reporter:
                     lines.append(f"  ➕ {_fmt_rec_line(rec)}")
             lines.append("")
 
+            lines.append("**字段差异明细**:")
+            lines.append("")
+
             has_diff = False
             fd = comp.get("field_diffs", {})
             for ex in sorted(fd.keys()):
@@ -378,10 +386,22 @@ class Reporter:
                     lines.append(f"  **{ex} {field}**:")
                     limit = None if s["diff"] < 10 else 10
                     for sd in s["sample_diffs"][:limit]:
+                        diff = round(sd['original'] - sd['new'], 4)
                         lines.append(
                             f"    {sd['code']}:"
                             f" 原={sd['original']}"
                             f" 新={sd['new']}"
+                            f" 差={diff}"
+                        )
+                    for sd in s.get("sample_missing_in_new", []):
+                        lines.append(
+                            f"    {sd['code']}:"
+                            f" 原={sd['original']} 新=— 差=—"
+                        )
+                    for sd in s.get("sample_missing_in_original", []):
+                        lines.append(
+                            f"    {sd['code']}:"
+                            f" 原=— 新={sd['new']} 差=—"
                         )
 
             if not has_diff:
@@ -474,29 +494,31 @@ class Reporter:
                 '<th>变化率</th></tr>'
             )
             total_size = 0
+            # 去重：每个文件只取最后一次记录
+            records: dict[str, dict] = {}
             with open(metadata_file) as f:
                 for line in f:
                     try:
                         rec = json.loads(line)
                         lfn = rec.get("local_filename", "")
-                        if date_str not in lfn:
-                            continue
-                        fn = rec["local_filename"]
-                        sz = rec.get("file_size_bytes", 0)
-                        prev = rec.get("previous_size_bytes")
-                        chg = rec.get("size_change_percent")
-                        prev_str = f"{prev:,}" if prev else "N/A"
-                        chg_str = f"{chg:+.2f}%" if chg else "N/A"
-                        flag = " 🔴" if chg and abs(chg) > 5 else ""
-                        parts.append(
-                            f'<tr><td>{fn}</td>'
-                            f'<td style="text-align:right">{sz:,}</td>'
-                            f'<td style="text-align:right">{prev_str}</td>'
-                            f'<td style="text-align:right">{chg_str}{flag}</td></tr>'
-                        )
-                        total_size += sz
+                        if date_str in lfn:
+                            records[lfn] = rec
                     except Exception:
                         pass
+            for fn, rec in sorted(records.items()):
+                sz = rec.get("file_size_bytes", 0)
+                prev = rec.get("previous_size_bytes")
+                chg = rec.get("size_change_percent")
+                prev_str = f"{prev:,}" if prev else "N/A"
+                chg_str = f"{chg:+.2f}%" if chg else "N/A"
+                flag = " 🔴" if chg and abs(chg) > 5 else ""
+                parts.append(
+                    f'<tr><td>{fn}</td>'
+                    f'<td style="text-align:right">{sz:,}</td>'
+                    f'<td style="text-align:right">{prev_str}</td>'
+                    f'<td style="text-align:right">{chg_str}{flag}</td></tr>'
+                )
+                total_size += sz
             parts.append(
                 f'<tr style="background:#f0f0f0;"><td><b>合计</b></td>'
                 f'<td style="text-align:right"><b>{total_size:,}</b></td>'
@@ -624,7 +646,8 @@ class Reporter:
                 to = s.get("total", 0) or 0
                 pct = s.get("null_pct", 0) or 0
                 abn = s.get("abnormal_null", 0) or 0
-                icon = "✅" if pct == 0 else ("⚠️" if pct < 10 else "❌")
+                ok_rate = (to - abn) / to * 100 if to > 0 else 100
+                icon = "✅" if abn == 0 else ("⚠️" if ok_rate >= 90 else "❌")
                 parts.append(
                     f'<tr><td>{icon} {f}</td>'
                     f'<td style="text-align:center">{nn}/{to}</td>'
@@ -679,10 +702,14 @@ class Reporter:
                 ):
                     continue
                 has_diff = True
-                samples = [
-                    f"{sd['code']}: 旧={sd['original']} 新={sd['new']}"
-                    for sd in s.get("sample_diffs", [])[:10]
-                ]
+                samples = []
+                for sd in s.get("sample_diffs", [])[:10]:
+                    diff = round(sd['original'] - sd['new'], 4)
+                    samples.append(f"{sd['code']}: 旧={sd['original']} 新={sd['new']} 差={diff}")
+                for sd in s.get("sample_missing_in_new", []):
+                    samples.append(f"{sd['code']}: 旧={sd['original']} 新=— 差=—")
+                for sd in s.get("sample_missing_in_original", []):
+                    samples.append(f"{sd['code']}: 旧=— 新={sd['new']} 差=—")
                 rows.append((f, samples))
             if not rows:
                 continue

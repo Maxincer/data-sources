@@ -7,9 +7,10 @@ from pathlib import Path
 
 from data_sources.parser import parse_file, ParseStats, merge_by_code_date
 from data_sources.modifier import (should_filter_contract,
+    pad_czce_code,
     fix_dce_limit_prices, fix_gfe_margin, fix_gfe_limit_prices,
     fix_all_margin, fill_zero_volume_close,
-    fill_cffex_margin_from_history)
+    fill_cffex_margin_from_history, fill_if_basis)
 from data_sources.trade_date import prev_trading_date
 from data_sources.db import create_table, upsert_records
 from mxz_utils.logging_config import get_logger
@@ -24,12 +25,23 @@ logger = get_logger(
 
 def _apply_modifiers(records):
     """Apply all Modifier transformations + filters to records."""
+    # ---- Code normalization (always first) ----
+    for r in records:
+        code = r.get("code", "")
+        # Uppercase all codes
+        code = code.upper()
+        # CZCE 3→4 digit expansion
+        if code.endswith(".CZC"):
+            code = pad_czce_code(code)
+        r["code"] = code
+
     records = fix_dce_limit_prices(records)
     records = fix_gfe_margin(records)
     records = fix_gfe_limit_prices(records)
     records = fix_all_margin(records)
     records = fill_zero_volume_close(records)
     records = fill_cffex_margin_from_history(records)
+    records = fill_if_basis(records)
 
     before = len(records)
     records = [

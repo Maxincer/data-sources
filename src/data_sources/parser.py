@@ -78,11 +78,23 @@ class ParseStats:
 
     @property
     def stats_summary(self) -> Dict:
+        # Fields that are naturally absent for this exchange (not an anomaly)
+        _EXPECTED_NULLS = {
+            "CFFEX": set(),
+            "CZCE": {"if_basis"},
+            "DCE": {"if_basis"},
+            "SHFE": {"if_basis"},
+            "INE": {"if_basis"},
+            "GFEX": {"if_basis"},
+            "CSI": {"if_basis", "long_margin", "short_margin", "minoq", "maxoq"},
+        }
+        expected = _EXPECTED_NULLS.get(self.exchange, set())
         return {
             "exchange": self.exchange,
             "data_type": self.data_type,
             "total_records": self.total,
-            "missing": self.missing,
+            "missing": {k: v for k, v in self.missing.items()
+                        if v > 0 and k not in expected},
             "errors": len(self.errors),
         }
 
@@ -181,28 +193,6 @@ def _exchange_suffix(exchange: str) -> str:
     m = {"SHFE": "SHF", "CFFEX": "CFE", "CZCE": "CZC",
          "DCE": "DCE", "GFEX": "GFE", "INE": "INE"}
     return SUFFIX_MAP.get(m.get(exchange, exchange), f".{exchange}")
-
-
-def _pad_czce_code(raw_code: str, ref_year: int = None) -> str:
-    """CZCE code 3-digit to 4-digit using the proper algorithm.
-
-    Uses the reference year (default: trade date year) to select the
-    correct century digit via the candidate closest to ref_year + 3.9.
-    e.g. ZC605 with ref_year=2026 -> ZC2605.CZC
-    """
-    m = re.search(rf"([a-zA-Z]+)(\d{{3,4}})$", raw_code)
-    if not m:
-        return raw_code
-    if len(m.group(2)) == 4:
-        return raw_code  # already 4-digit
-    if len(m.group(2)) == 3:
-        if ref_year is None:
-            ref_year = dt.datetime.now().year
-        w = (ref_year // 10) * 10 + ord(m.group(2)[0]) - 0x30
-        candi = [w - 10, w, w + 10]
-        candi.sort(key=lambda x: abs(x + 3.9 - ref_year))
-        return f"{m.group(1)}{candi[0] % 100:02d}{m.group(2)[1:]}"
-    return raw_code
 
 
 # -----------------------------------------------------------------------
@@ -372,7 +362,7 @@ def _parse_czce_daily(fpath: Path) -> List[Dict]:
             if not code_raw or not re.match(r"^[A-Z]+\d+", code_raw):
                 continue
             rec = {
-                "code": _pad_czce_code(code_raw, int(date[:4])) + ".CZC",
+                "code": code_raw + ".CZC",
                 "date": date,
                 "pre_settle": _float(parts[1]),
                 "open": _float(parts[2]),
@@ -413,7 +403,7 @@ def _parse_czce_settlement(fpath: Path) -> List[Dict]:
             settle = _float(parts[1])
             margin_pct = float(parts[4].replace(",","")) / 100.0 if parts[4].strip().replace(",","") else None
             rec = {
-                "code": _pad_czce_code(code_raw, int(date[:4])) + ".CZC",
+                "code": code_raw + ".CZC",
                 "date": date,
                 "settle": settle,
                 "long_margin": margin_pct,
@@ -448,11 +438,9 @@ def _parse_czce_tradepara(fpath: Path) -> List[Dict]:
         pre_settle = _float(parts[4])
         limit_pct = _float(limit_raw) / 100.0 if limit_raw else None
         minoq = _float_to_int(_float(parts[8]))
-        maxoq_limit = _float_to_int(_float(parts[9]))
-        maxoq_market = _float_to_int(_float(parts[10]))
-        maxoq = maxoq_limit if maxoq_limit else maxoq_market
+        maxoq = _float_to_int(_float(parts[9]))  # 限价单最大下单量
         rec = {
-            "code": _pad_czce_code(code_raw, int(date[:4])) + ".CZC",
+            "code": code_raw + ".CZC",
             "date": date,
             "pre_settle": pre_settle,
             "_limit_pct": limit_pct,

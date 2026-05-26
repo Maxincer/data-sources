@@ -49,6 +49,8 @@ class CompareResult:
         self.total_abnormal_missing_new = 0
         self.max_deviation = 0.0
         self.sample_diffs: List[Dict] = []
+        self.sample_missing_in_new: List[Dict] = []
+        self.sample_missing_in_original: List[Dict] = []
 
     @property
     def summary(self) -> Dict:
@@ -65,6 +67,8 @@ class CompareResult:
             "abnormal_missing_new": self.total_abnormal_missing_new,
             "max_deviation_pct": round(self.max_deviation, 4),
             "sample_diffs": sorted_samples[:10],
+            "sample_missing_in_new": self.sample_missing_in_new[:10],
+            "sample_missing_in_original": self.sample_missing_in_original[:10],
         }
 
 
@@ -331,7 +335,7 @@ class Verifier:
                 fields = [
                     "code", "date", "open", "high", "low", "close",
                     "volume", "amt", "oi", "settle", "maxup", "maxdown",
-                    "long_margin", "short_margin", "minoq", "maxoq",
+                    "if_basis", "long_margin", "short_margin", "minoq", "maxoq",
                 ]
 
                 result = {}
@@ -340,12 +344,19 @@ class Verifier:
                     for field in fields:
                         # abnormal_null: 字段缺失且(amt缺失或amt!=0)才计数
                         # amt字段本身缺失则始终计数
+                        # if_basis: 仅CFE的股指期货(IF/IC/IH/IM)有该字段, 其余合约天然为空不计异常
+                        extra_abn = ""
+                        if field == "if_basis":
+                            if ex != "CFE":
+                                extra_abn = " AND 1=0"  # 非CFE不计数
+                            else:
+                                extra_abn = " AND code REGEXP '^(IF|IC|IH|IM)'"
                         cur.execute(f"""
                             SELECT COUNT(*) AS total,
                                    SUM(CASE WHEN {field} IS NOT NULL THEN 1 ELSE 0 END) AS non_null,
                                    SUM(CASE WHEN {field} IS NULL AND (
                                        '{field}' = 'amt' OR amt IS NULL OR amt != 0
-                                   ) THEN 1 ELSE 0 END) AS abnormal_null
+                                   ){extra_abn} THEN 1 ELSE 0 END) AS abnormal_null
                             FROM future_cn.t_futures_info_exchange
                             WHERE date = '{dt}'
                               AND SUBSTRING_INDEX(code, '.', -1) = '{ex}'
@@ -387,7 +398,8 @@ class Verifier:
                 exchanges = [r["ex"] for r in cur.fetchall()]
 
                 fields = ["open","high","low","close","volume","amt","oi",
-                           "settle","maxup","maxdown","long_margin","short_margin"]
+                           "settle","maxup","maxdown","long_margin",
+                           "short_margin","minoq","maxoq"]
                 result = {}
                 for ex in exchanges:
                     if ex == "CSI":
@@ -469,7 +481,6 @@ class Verifier:
     def compare_all(
         self,
         target_date: Optional[str] = None,
-        tolerance: float = 0.01,
     ) -> Dict:
         """
         Comprehensive comparison between t_futures_info (original) and
@@ -479,10 +490,10 @@ class Verifier:
         2. Records missing from new table
         3. Records extra in new table
         4. Field-level differences for matching records
+             (round to 4 decimal places; any difference → flagged)
 
         Args:
             target_date: YYYYMMDD date to filter. None = all dates.
-            tolerance: Relative tolerance (% deviation) for float fields.
 
         Returns:
             Dict with keys:
@@ -523,9 +534,8 @@ class Verifier:
             s = str(d).replace("-", "")
             return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
 
-        # Normalize code to uppercase for comparison (201 stores UPPER, 202 stores lower)
-        orig_set = {(r["code"].upper(), _fmt_dt(r["date"])) for r in orig_rows}
-        new_set = {(r["code"].upper(), _fmt_dt(r["date"])) for r in new_rows}
+        orig_set = {(r["code"], _fmt_dt(r["date"])) for r in orig_rows}
+        new_set = {(r["code"], _fmt_dt(r["date"])) for r in new_rows}
 
         matched_set = orig_set & new_set
         missing_records = [{"code": c, "date": d} for c, d in sorted(orig_set - new_set)]
@@ -579,7 +589,7 @@ class Verifier:
         fields = [
             "open", "high", "low", "close", "volume",
             "amt", "oi", "settle", "maxup", "maxdown",
-            "long_margin", "short_margin", "minoq", "maxoq",
+            "if_basis", "long_margin", "short_margin", "minoq", "maxoq",
         ]
         field_results: Dict[str, Dict[str, CompareResult]] = {}
 
@@ -588,9 +598,8 @@ class Verifier:
             col_list = ", ".join(fields)
             for cd_start in range(0, len(code_date_list), 500):
                 batch = code_date_list[cd_start:cd_start + 500]
-                # Query both tables with case-insensitive match
                 conditions = " OR ".join([
-                    f"(UPPER(code) = '{c}' AND date = '{d}')"
+                    f"(code = '{c}' AND date = '{d}')"
                     for c, d in batch
                 ])
 
@@ -605,7 +614,7 @@ class Verifier:
                             WHERE {conditions}
                         """)
                         for row in cur.fetchall():
-                            k = (row["code"].upper(), str(row["date"]))
+                            k = (row["code"], str(row["date"]))
                             orig_data[k] = row
                 finally:
                     orig_conn.close()
@@ -621,7 +630,7 @@ class Verifier:
                             WHERE {conditions}
                         """)
                         for row in cur.fetchall():
-                            k = (row["code"].upper(), str(row["date"]))
+                            k = (row["code"], str(row["date"]))
                             new_data[k] = row
                 finally:
                     new_conn.close()
@@ -649,29 +658,38 @@ class Verifier:
                             continue
                         if ov is None and nv is not None:
                             cr.total_missing_original += 1
+                            if len(cr.sample_missing_in_original) < 5:
+                                cr.sample_missing_in_original.append({
+                                    "code": code, "date": date,
+                                    "original": None, "new": round(float(nv), 4),
+                                })
                             continue
                         if ov is not None and nv is None:
                             cr.total_missing_new += 1
                             oa = o_row.get("amt")
                             if field == "amt" or oa is None or float(oa) != 0:
                                 cr.total_abnormal_missing_new += 1
+                            if len(cr.sample_missing_in_new) < 5:
+                                cr.sample_missing_in_new.append({
+                                    "code": code, "date": date,
+                                    "original": round(float(ov), 4), "new": None,
+                                })
                             continue
 
-                        ov = float(ov)
-                        nv = float(nv)
-                        diff_val = abs(ov - nv)
-                        max_abs = max(abs(ov), abs(nv))
-                        deviation = diff_val / max_abs * 100 if max_abs > 0 else 0.0
+                        ov = round(float(ov), 4)
+                        nv = round(float(nv), 4)
 
-                        if deviation > tolerance:
+                        if ov != nv:
                             cr.total_diff += 1
+                            max_abs = max(abs(ov), abs(nv))
+                            deviation = abs(ov - nv) / max_abs * 100 if max_abs > 0 else 0.0
                             cr.max_deviation = max(cr.max_deviation, deviation)
                             if len(cr.sample_diffs) < 10:
                                 cr.sample_diffs.append({
                                     "code": code,
                                     "date": date,
-                                    "original": round(ov, 4),
-                                    "new": round(nv, 4),
+                                    "original": ov,
+                                    "new": nv,
                                     "deviation_pct": round(deviation, 4),
                                 })
                         else:
@@ -727,9 +745,10 @@ class Verifier:
             fields = [
                 "open", "high", "low", "close", "volume",
                 "amt", "oi", "settle", "maxup", "maxdown",
-                "long_margin", "short_margin",
+                "if_basis", "long_margin", "short_margin", "minoq", "maxoq",
             ]
 
+        from data_sources.modifier import czc_to_wind_code
         from data_sources.wind_client import WindClient
 
         client = WindClient()
@@ -787,7 +806,8 @@ class Verifier:
         no_match_count = 0
 
         for code in all_codes:
-            wind = client.get_wsd(code, target_date, fields)
+            wind_code = czc_to_wind_code(code)
+            wind = client.get_wsd(wind_code, target_date, fields)
             if wind is None:
                 wind_unavailable.append(code)
                 continue
@@ -993,7 +1013,7 @@ class Verifier:
         all_fields = [
             "open", "high", "low", "close", "volume",
             "amt", "oi", "settle", "maxup", "maxdown",
-            "long_margin", "short_margin", "minoq", "maxoq",
+            "if_basis", "long_margin", "short_margin", "minoq", "maxoq",
         ]
 
         for ex in sorted(field_results.keys()):

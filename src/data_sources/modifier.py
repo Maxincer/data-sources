@@ -45,20 +45,66 @@ CZCE_TICK_SIZE = {
 }
 
 
-def pad_czce_code(raw_code: str, ref_year: int = None) -> str:
-    """CZCE 3-digit to 4-digit: ZC605 -> ZC2605"""
-    m = re.search(rf"([a-zA-Z]+)(\d{{3,4}})$", raw_code)
+def pad_czce_code(raw_code: str, ref_date: datetime.date = None) -> str:
+    """CZCE 3-digit to 4-digit: ZC605 -> ZC2605, ZC605.CZC -> ZC2605.CZC.
+
+    Deterministic via listing horizon: valid contracts at any time span
+    [ref_date - 1month, ref_date + 12months].  Picks the candidate year
+    (decade ± 10 around the year digit) whose delivery month is closest
+    to ref_date — exactly one candidate falls within the valid range.
+    """
+    # Strip exchange suffix (e.g. ".CZC") for matching, re-attach later
+    suffix = ""
+    if "." in raw_code and raw_code.rsplit(".", 1)[-1].isalpha():
+        body, suffix = raw_code.rsplit(".", 1)
+        suffix = f".{suffix}"
+    else:
+        body = raw_code
+
+    m = re.search(rf"([a-zA-Z]+)(\d{{3,4}})$", body)
     if not m:
         return raw_code
-    if len(m.group(2)) == 4:
+    digits = m.group(2)
+    if len(digits) == 4:
         return raw_code
-    if ref_year is None:
-        import datetime
-        ref_year = datetime.datetime.now().year
-    w = (ref_year // 10) * 10 + ord(m.group(2)[0]) - 0x30
-    candidates = [w - 10, w, w + 10]
-    candidates.sort(key=lambda x: abs(x + 3.9 - ref_year))
-    return f"{m.group(1)}{candidates[0] % 100:02d}{m.group(2)[1:]}"
+
+    if ref_date is None:
+        import datetime as _dt
+        ref_date = _dt.date.today()
+
+    year_digit = int(digits[0])
+    month = int(digits[1:3])
+    decade = (ref_date.year // 10) * 10
+    ref_months = ref_date.year * 12 + ref_date.month - 1  # month ordinal
+
+    best_offset: int = 9999
+    best_year: int | None = None
+    for candidate_year in (decade + year_digit - 10,
+                            decade + year_digit,
+                            decade + year_digit + 10):
+        offset = (candidate_year * 12 + month) - ref_months
+        if abs(offset) < abs(best_offset):
+            best_offset = offset
+            best_year = candidate_year
+
+    return f"{m.group(1)}{best_year % 100:02d}{digits[1:]}{suffix}"
+
+
+def czc_to_wind_code(code: str) -> str:
+    """CZCE 4-digit → 3-digit for Wind WSD query.
+
+    t_futures stores 4-digit CZCE codes (e.g. CF2605.CZC), but Wind
+    WSD expects 3-digit (CF605.CZC).  Non-CZCE codes pass through.
+    """
+    if not code.endswith(".CZC"):
+        return code
+    m = re.search(r"(\d+)", code)
+    if not m:
+        return code
+    digits = m.group(1)
+    if len(digits) == 4:
+        return code.replace(digits, digits[1:])
+    return code
 
 
 # ===================================================================
@@ -307,6 +353,17 @@ def fix_dce_limit_prices(records: list) -> list:
                     rec["short_margin"] = prev["short_margin"]
 
             prev = cur
+
+        # 到期合约（最后交易日被交易所摘牌，今日无TradingParams）
+        # 用前一天的涨跌停/保证金数据回填今日的 DailyMarket/Settlement 记录
+        if prev is not None:
+            for rec in records:
+                if rec.get("code") == code and rec.get("maxup") is None:
+                    rec["maxup"] = prev["maxup"]
+                    rec["maxdown"] = prev["maxdown"]
+                    if prev["long_margin"] is not None:
+                        rec["long_margin"] = prev["long_margin"]
+                        rec["short_margin"] = prev["short_margin"]
 
     # Clean up internal fields
     for rec in records:
@@ -600,5 +657,54 @@ def fill_cffex_margin_from_history(records: list) -> list:
                 rec["long_margin"] = lm
             if rec.get("short_margin") is None and sm is not None:
                 rec["short_margin"] = sm
+
+    return records
+
+
+# ===================================================================
+# 13. CFFEX 基差（if_basis）计算
+# ===================================================================
+
+# 股指期货 → 对应现货指数
+_CFFEX_INDEX_MAP = {
+    "IF": "000300",  # 沪深300
+    "IC": "000905",  # 中证500
+    "IH": "000016",  # 上证50
+    "IM": "000852",  # 中证1000
+}
+
+
+def fill_if_basis(records: list) -> list:
+    """计算 CFFEX 股指期货的基差: if_basis = close - index_close.
+
+    从 records 中查找对应 CSI 指数的 close 值，与 CFFEX 合约的
+    close 做差。国债期货（T/TF/TL/TS）无对应指数，跳过。
+    """
+    # 构建 index_code → close 查找表
+    index_close: dict[str, float] = {}
+    for rec in records:
+        code = rec.get("code", "")
+        if not code.endswith(".CSI"):
+            continue
+        c = rec.get("close")
+        if c is not None:
+            index_close[code.split(".")[0]] = float(c)
+
+    if not index_close:
+        return records
+
+    for rec in records:
+        code = rec.get("code", "")
+        if not code.endswith(".CFE"):
+            continue
+        raw = code.split(".")[0]
+        product = "".join(c for c in raw if c.isalpha())
+        index_code = _CFFEX_INDEX_MAP.get(product)
+        if index_code is None:
+            continue  # 国债期货，无对应指数
+        ic = index_close.get(index_code)
+        c = rec.get("close")
+        if ic is not None and c is not None:
+            rec["if_basis"] = round(float(c) - ic, 4)
 
     return records
