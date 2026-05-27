@@ -501,3 +501,11 @@ bash scripts/pipeline.sh
 影响范围：到期月份的合约（如 5/26 为 2605 合约最后交易日），通常 5–10 个合约。这些合约在 `t_futures_info`（Wind 源）中有完整数据，两表对比会出现差异。
 
 验证：前一天（5/25）的 TradingParameters 中含有到期合约（eg2605/bz2605/jd2605/lh2605/eb2605/lg2605/pg2605），确认是到期摘牌导致。
+
+### Wind WSS `code_col=code` 与 `minoq,maxoq` 字段冲突
+
+调用 `cpp_py.w.wss()` 时，如果 options 中包含 `code_col=code`，同时查询字段含 `minoq` 或 `maxoq`，会返回 `CWSSService: invalid indicators` 错误（ec=-40522006）。
+
+**解决办法**：去掉 `code_col=code` 选项。去掉后 ec=0，数据按输入代码顺序返回，code 列不输出，需要通过行号映射回对应合约。
+
+**已知能用**：`code_col=code` + `open,close,volume,...` 等标准字段无此问题。仅 `minoq/maxoq` 两个字段受影响。

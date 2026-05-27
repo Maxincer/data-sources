@@ -1,0 +1,79 @@
+exchange,variety_id,variety_name,product_type,maxoq_limit,maxoq_market,minoq,source,notes
+# ===== CFFEX =====
+CFFEX,IF,沪深300股指,期货,100,50,1,交易细则,限价100手 市价50手
+CFFEX,IH,上证50股指,期货,100,50,1,交易细则,
+CFFEX,IC,中证500股指,期货,100,50,1,交易细则,
+CFFEX,IM,中证1000股指,期货,100,50,1,交易细则,
+CFFEX,T,10年期国债,期货,200,50,1,交易细则,
+CFFEX,TF,5年期国债,期货,200,50,1,交易细则,
+CFFEX,TL,30年期国债,期货,200,50,1,交易细则,
+CFFEX,TS,2年期国债,期货,200,50,1,交易细则,
+# ===== CZCE =====
+CZCE,AP,苹果,期货,1000,200,1,FutureTradeParam.txt,
+CZCE,CF,棉花,期货,1000,200,1,FutureTradeParam.txt,
+CZCE,CJ,红枣,期货,100,20,1,FutureTradeParam.txt,
+CZCE,CY,棉纱,期货,1000,200,1,FutureTradeParam.txt,
+CZCE,FG,玻璃,期货,1000,200,1,FutureTradeParam.txt,
+CZCE,JR,粳稻,期货,1000,200,10,FutureTradeParam.txt,最小开仓10手
+CZCE,MA,甲醇,期货,1000,200,1,FutureTradeParam.txt,部分合约调整为8手(见MA2604/2605公告)
+CZCE,OI,菜籽油,期货,1000,200,1,FutureTradeParam.txt,
+CZCE,PF,短纤,期货,1000,200,1,FutureTradeParam.txt,
+CZCE,PK,花生,期货,1000,200,1,FutureTradeParam.txt,
+CZCE,PL,瓶片,期货,1000,200,1,FutureTradeParam.txt,
+CZCE,PM,普麦,期货,1000,200,10,FutureTradeParam.txt,最小开仓10手
+CZCE,PR,丙烯,期货,1000,200,1,FutureTradeParam.txt,
+CZCE,PX,对二甲苯,期货,1000,200,1,FutureTradeParam.txt,
+CZCE,RI,早籼稻,期货,1000,200,10,FutureTradeParam.txt,最小开仓10手
+CZCE,RM,菜粕,期货,1000,200,1,FutureTradeParam.txt,
+CZCE,RS,油菜籽,期货,1000,200,1,FutureTradeParam.txt,
+CZCE,SA,纯碱,期货,1000,200,1,FutureTradeParam.txt,
+CZCE,SF,硅铁,期货,1000,200,1,FutureTradeParam.txt,
+CZCE,SH,烧碱,期货,1000,200,1,FutureTradeParam.txt,
+CZCE,SM,锰硅,期货,1000,200,1,FutureTradeParam.txt,
+CZCE,SR,白糖,期货,1000,200,1,FutureTradeParam.txt,
+CZCE,TA,PTA,期货,1000,200,1,FutureTradeParam.txt,
+CZCE,UR,尿素,期货,1000,200,1,FutureTradeParam.txt,
+CZCE,WH,强麦,期货,1000,200,10,FutureTradeParam.txt,最小开仓10手
+CZCE,ZC,动力煤,期货,50,10,4,FutureTradeParam.txt,最小开仓4手
+# ===== DCE =====
+DCE,a,豆一,期货,1000,1000,1,tradingParam API + Wind WSD,minoq=1 为默认值(Wind WSD确认)
+DCE,b,豆二,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,bb,胶合板,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,bz,纯苯,期货,1000,1000,4,tradingParam API + Wind WSD,大商所发〔2026〕74号; Wind WSD返回4
+DCE,c,玉米,期货,2000,2000,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,cs,玉米淀粉,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,eb,苯乙烯,期货,1000,1000,8,tradingParam API + Wind WSD,大商所发〔2026〕74号; Wind WSD返回8
+DCE,eg,乙二醇,期货,1000,1000,8,tradingParam API + Wind WSD,大商所发〔2026〕74号; Wind WSD返回8
+DCE,fb,纤维板,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,i,铁矿石,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,j,焦炭,期货,500,500,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,jd,鸡蛋,期货,300,300,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,jm,焦煤,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,l,聚乙烯,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,l-F,聚乙烯月均价,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,lg,原木,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,lh,生猪,期货,50,50,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,m,豆粕,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,p,棕榈油,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,pg,液化石油气,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,pp,聚丙烯,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,pp-F,聚丙烯月均价,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,rr,粳米,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,v,聚氯乙烯,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,v-F,聚氯乙烯月均价,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
+DCE,y,豆油,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
+# ===== GFEX =====
+GFEX,si,工业硅,期货,1000,1000,1,品种业务细则,
+GFEX,lc,碳酸锂,期货,1000,1000,1,品种业务细则,远月合约(LC2601+) min开仓=5手(品种公告)
+GFEX,ps,多晶硅,期货,1000,1000,1,品种业务细则,PS2601-2702 min=10手(广期所发〔2025〕420号)
+GFEX,pt,铂,期货,1000,1000,1,品种业务细则,
+GFEX,pd,钯,期货,1000,1000,1,品种业务细则,
+# ===== INE =====
+INE,sc,原油,期货,500,,1,交易管理办法,无市价指令
+INE,nr,20号胶,期货,500,,1,交易管理办法,无市价指令
+INE,lu,低硫燃料油,期货,500,,1,交易管理办法,无市价指令
+INE,bc,国际铜,期货,500,,1,交易管理办法,无市价指令
+INE,ec,集运指数(欧线),期货,500,,1,交易管理办法,无市价指令
+# ===== SHFE =====
+SHFE,ALL,全部期货,期货,500,,1,交易管理办法,无市价指令
+SHFE,ALL,全部期权,期权,100,,1,交易管理办法,无市价指令
