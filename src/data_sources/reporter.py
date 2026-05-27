@@ -14,12 +14,10 @@ from typing import List, Optional
 
 import logging
 
-import pymysql
 import requests
-from pymysql.cursors import DictCursor
 
 from data_sources.task import Task
-from data_sources.verifier import DB_CONFIG, DB_CONFIG_ORIG, Verifier
+from data_sources.verifier import Verifier
 from mxz_utils.logging_config import get_logger
 
 
@@ -91,10 +89,6 @@ class Reporter:
             date_str: 交易日 YYYYMMDD
             skip_table_compare: True=阶段二，跳过两表对比，仅做 WSS 交叉验证
             email: 是否同时发送邮件
-
-        一次计算，两个渠道：
-          1. 飞书（默认）
-          2. 邮件（email=True 时同时发送）
         """
         from data_sources.db import fetch_table
         from data_sources.wind_client import fetch_wind_data
@@ -108,26 +102,18 @@ class Reporter:
             self._build_field_stats_section(stats, abnormal),
         ]
 
-        ec = {}
-        fd = {}
-        comp = {}
-        wind_comp = {}
-
-        # Fetch our data once
+        # Build comparison results (shared by Feishu and email)
+        comparisons: list[tuple[str, dict]] = []
         ours = fetch_table("t_futures_info_exchange", date_str)
 
         if not skip_table_compare:
             # Phase 1a: 两表对比
             wind_tbl = fetch_table("t_futures_info", date_str)
             comp = v.compare_all(date_str, ours, wind_tbl)
-            ec = comp.get("exchange_counts", {})
-            fd = comp.get("field_diffs", {})
-            feishu_sections.append(
-                self._build_comparison_section(
-                    "cross-validation: t_futures_info_exchange vs t_futures_info",
-                    comp, date_str,
-                )
-            )
+            comparisons.append((
+                "cross-validation: t_futures_info_exchange vs t_futures_info",
+                comp,
+            ))
 
         # Phase 1b / Phase 2: Wind WSS 交叉验证
         wind_data = fetch_wind_data(date_str)
@@ -138,22 +124,25 @@ class Reporter:
                 if skip_table_compare
                 else "cross-validation: t_futures_info_exchange vs wss"
             )
-            feishu_sections.append(
-                self._build_comparison_section(title, wind_comp, date_str)
-            )
+            comparisons.append((title, wind_comp))
 
+        # Feishu
+        for title, comp in comparisons:
+            feishu_sections.append(
+                self._build_comparison_section(title, comp, date_str)
+            )
         self._send_feishu_markdown(
             f"📊 数据验证报告 {date_str}",
             "\n\n---\n\n".join(feishu_sections),
         )
 
+        # Email
         if email:
             recipients = email_recipients or self._DEFAULT_RECIPIENTS
             sender_addr = sender or self._DEFAULT_SENDER
             self._smtp_send(
-                date_str, stats, abnormal, ec, fd, comp,
+                date_str, stats, abnormal, comparisons,
                 sender=sender_addr, recipients=recipients,
-                wind_comp=wind_comp,
             )
 
         self.logger.info("Report for %s sent.", date_str)
@@ -169,10 +158,9 @@ class Reporter:
             sender=sender, email_recipients=recipients,
         )
 
-    def _smtp_send(self, date_str, stats, abnormal, ec, fd, comp,
-                   sender=None, recipients=None,
-                   wind_comp: Optional[dict] = None):
-        """发送邮件（SMTP），使用已计算好的数据。"""
+    def _smtp_send(self, date_str, stats, abnormal, comparisons,
+                   sender=None, recipients=None):
+        """发送邮件（SMTP）。"""
         password = os.environ.get("SMTP_PASSWORD")
         if not password:
             self.logger.warning("SMTP_PASSWORD 未设置，跳过邮件发送")
@@ -186,15 +174,11 @@ class Reporter:
             self._email_header(date_str),
             self._email_file_size_section(date_str),
         ]
-        # Phase 1: table comparison
-        if ec or comp:
-            html_parts.append(self._email_coverage(ec, comp, date_str))
-            html_parts.append(self._email_field_diffs(fd))
-        # Always: field stats
+        for title, comp in comparisons:
+            html_parts.append(
+                self._email_comparison_section(title, comp, date_str)
+            )
         html_parts.append(self._email_field_stats(stats, abnormal))
-        # Always: Wind cross-validation
-        if wind_comp:
-            html_parts.append(self._email_field_diffs(wind_comp))
         html_parts.append(self._email_footer())
 
         msg = MIMEMultipart("alternative")
@@ -521,11 +505,28 @@ class Reporter:
         )
 
     @staticmethod
-    def _email_coverage(ec: dict, comp: dict, date_str: str) -> str:
-        parts = ['<h2>📋 合约覆盖率</h2>']
+    def _email_comparison_section(title: str, comp: dict, date_str: str) -> str:
+        """Unified comparison section for email (HTML)."""
+        parts = [f'<h2>{title}</h2>']
+
+        ec = comp.get("exchange_counts", {})
+        total_a = comp.get("total_source_a", 0)
+        total_b = comp.get("total_source_b", 0)
+        matched = comp.get("matched_count", 0)
+        missing_count = comp.get("missing_count", 0)
+        extra_count = comp.get("extra_count", 0)
+
         parts.append(
-            '<table border="1" cellpadding="8" cellspacing="0"'
-            ' style="border-collapse:collapse;width:100%;">'
+            f'<p>source_a: <b>{total_a}</b> 条, '
+            f'source_b: <b>{total_b}</b> 条, '
+            f'匹配: <b>{matched}</b> 条</p>'
+        )
+
+        # Contracts count table
+        parts.append('<h3>contracts count</h3>')
+        parts.append(
+            '<table border="1" cellpadding="6" cellspacing="0"'
+            ' style="border-collapse:collapse;">'
         )
         parts.append(
             '<tr style="background:#f5f5f5;">'
@@ -535,70 +536,95 @@ class Reporter:
         for ex in sorted(ec.keys()):
             if ex == "CSI":
                 continue
-            c = ec[ex]
-            color = "red" if c["missing"] > 0 else "green"
+            d = ec[ex]
+            color = "red" if d["missing"] > 0 else "green"
             parts.append(
                 f'<tr><td><b>{ex}</b></td>'
-                f'<td style="text-align:center">{c["source_a"]}</td>'
-                f'<td style="text-align:center">{c["source_b"]}</td>'
-                f'<td style="text-align:center;color:{color}">'
-                f'{c["missing"]}</td>'
-                f'<td style="text-align:center">'
-                f'{c["extra"]}</td></tr>'
+                f'<td style="text-align:center">{d["source_a"]}</td>'
+                f'<td style="text-align:center">{d["source_b"]}</td>'
+                f'<td style="text-align:center;color:{color}">{d["missing"]}</td>'
+                f'<td style="text-align:center">{d["extra"]}</td></tr>'
             )
         parts.append('</table>')
 
+        # Missing / extra
         missing_records = comp.get("missing_records", [])
         extra_records = comp.get("extra_records", [])
-        if missing_records:
+        if missing_count:
+            parts.append(f'<p>⚠️ 缺漏: {missing_count} 条 (source_a有/source_b无)</p>')
+            parts.append('<ul>')
+            for rec in missing_records[:10]:
+                code = rec.get("code", "?")
+                close_v = rec.get("close", "—")
+                parts.append(f'<li>❌ {code} close={close_v}</li>')
+            if missing_count > 10:
+                parts.append(f'<li>... 还有 {missing_count - 10} 条</li>')
+            parts.append('</ul>')
+        if extra_count:
+            parts.append(f'<p>➕ 多余: {extra_count} 条 (source_b有/source_a无)</p>')
+            parts.append('<ul>')
+            for rec in extra_records[:10]:
+                code = rec.get("code", "?")
+                parts.append(f'<li>➕ {code}</li>')
+            parts.append('</ul>')
+
+        # Field summary
+        fs = comp.get("field_summary", {})
+        if fs:
+            parts.append('<h3>字段差异汇总</h3>')
             parts.append(
-                '<h3>⚠️ 缺漏明细 (原表有/新表无, 最多10条)</h3>'
+                '<table border="1" cellpadding="6" cellspacing="0"'
+                ' style="border-collapse:collapse;">'
             )
             parts.append(
-                '<table border="1" cellpadding="4" cellspacing="0"'
-                ' style="border-collapse:collapse;font-size:12px;">'
+                '<tr style="background:#f5f5f5;">'
+                '<th>字段</th><th>匹配</th><th>差异</th>'
+                '<th>缺a</th><th>缺b</th></tr>'
             )
-            parts.append(
-                '<tr style="background:#f5f5f5;"><th>合约</th>' +
-                ''.join(f'<th>{f}</th>' for f in _FULL_FIELDS) +
-                '</tr>'
-            )
-            for rec in _fetch_records_details(
-                missing_records[:10], "t_futures_info", date_str
-            ):
+            for fname in _FULL_FIELDS:
+                s = fs.get(fname, {})
+                if s.get("diff", 0) == 0 and s.get("missing_a", 0) == 0 and s.get("missing_b", 0) == 0:
+                    continue
+                color = "red" if s.get("diff", 0) > 0 else "green"
                 parts.append(
-                    '<tr><td>'
-                    + ((rec.get("code", "") or ""))
-                    + '</td>' + ''.join(_td(rec.get(f))
-                                        for f in _FULL_FIELDS)
-                    + '</tr>'
+                    f'<tr style="color:{color}"><td><b>{fname}</b></td>'
+                    f'<td style="text-align:right">{s.get("matched", 0)}</td>'
+                    f'<td style="text-align:right">{s.get("diff", 0)}</td>'
+                    f'<td style="text-align:right">{s.get("missing_a", 0)}</td>'
+                    f'<td style="text-align:right">{s.get("missing_b", 0)}</td></tr>'
                 )
             parts.append('</table>')
 
-        if extra_records:
-            parts.append(
-                '<h3>➕ 多余明细 (新表有/原表无, 最多10条)</h3>'
-            )
-            parts.append(
-                '<table border="1" cellpadding="4" cellspacing="0"'
-                ' style="border-collapse:collapse;font-size:12px;">'
-            )
-            parts.append(
-                '<tr style="background:#f5f5f5;"><th>合约</th>' +
-                ''.join(f'<th>{f}</th>' for f in _FULL_FIELDS) +
-                '</tr>'
-            )
-            for rec in _fetch_records_details(
-                extra_records[:10], "t_futures_info_exchange", date_str
-            ):
-                parts.append(
-                    '<tr><td>'
-                    + ((rec.get("code", "") or ""))
-                    + '</td>' + ''.join(_td(rec.get(f))
-                                        for f in _FULL_FIELDS)
-                    + '</tr>'
-                )
-            parts.append('</table>')
+        # Per-exchange per-field details
+        fd = comp.get("field_diffs", {})
+        if fd:
+            parts.append('<h3>groupby ex, field</h3>')
+            for ex in sorted(fd.keys()):
+                if ex == "CSI":
+                    continue
+                ex_diffs = fd[ex]
+                for field in _FULL_FIELDS:
+                    s = ex_diffs.get(field, {})
+                    if s.get("diff", 0) == 0 and s.get("missing_in_original", 0) == 0 and s.get("missing_in_new", 0) == 0:
+                        continue
+                    diff_count = s.get("diff", 0)
+                    limit = None if diff_count < 10 else 10
+                    samples = s.get("sample_diffs", [])
+                    missing_b = s.get("sample_missing_in_new", [])
+                    missing_a = s.get("sample_missing_in_original", [])
+                    parts.append(f'<p><b>{ex} {field}</b></p>')
+                    parts.append('<ul>')
+                    for sd in samples[:limit]:
+                        diff = round(sd['original'] - sd['new'], 4) if isinstance(sd.get('original'), (int, float)) and isinstance(sd.get('new'), (int, float)) else "—"
+                        parts.append(
+                            f'<li>{sd["code"]}: 原={sd["original"]} 新={sd["new"]} 差={diff}</li>'
+                        )
+                    for sd in missing_b:
+                        parts.append(f'<li>{sd["code"]}: 原={sd["original"]} 新=—</li>')
+                    for sd in missing_a:
+                        parts.append(f'<li>{sd["code"]}: 原=— 新={sd["new"]}</li>')
+                    parts.append('</ul>')
+
         return "\n".join(parts)
 
     @staticmethod
@@ -633,83 +659,6 @@ class Reporter:
                     f'<td style="text-align:center">{abn}</td></tr>'
                 )
             parts.append('</table>')
-
-            if ex in abnormal and abnormal[ex]:
-                parts.append('<p><b>异常空值明细:</b></p>')
-                parts.append(
-                    '<table border="1" cellpadding="4" cellspacing="0"'
-                    ' style="border-collapse:collapse;font-size:13px;">'
-                )
-                parts.append(
-                    '<tr style="background:#f5f5f5;">'
-                    '<th>合约</th><th>空值字段</th><th>amt</th>'
-                    '<th>判定</th></tr>'
-                )
-                for rec in abnormal[ex]:
-                    code = (
-                        (rec.get("code", "") or "").split(".")[0] or "?"
-                    )
-                    nulls = rec.get("_null_fields", []) or []
-                    cls = rec.get("_classification", "") or ""
-                    amt = rec.get("amt")
-                    amt_str = f"{amt:>,.0f}" if amt else "—"
-                    parts.append(
-                        f'<tr><td>{code}</td>'
-                        f'<td>{", ".join(nulls)}</td>'
-                        f'<td style="text-align:right">{amt_str}</td>'
-                        f'<td>{cls}</td></tr>'
-                    )
-                parts.append('</table>')
-        return "\n".join(parts)
-
-    @staticmethod
-    def _email_field_diffs(fd: dict) -> str:
-        parts = ['<h2>🔍 字段差异明细</h2>']
-        has_diff = False
-        for ex in sorted(fd.keys()):
-            if ex == "CSI":
-                continue
-            ex_d = fd[ex]
-            rows = []
-            for f in _FULL_FIELDS:
-                s = ex_d.get(f, {}) or {}
-                if (
-                    s.get("diff", 0) == 0
-                    and s.get("missing_in_original", 0) == 0
-                    and s.get("missing_in_new", 0) == 0
-                ):
-                    continue
-                has_diff = True
-                samples = []
-                for sd in s.get("sample_diffs", [])[:10]:
-                    diff = round(sd['original'] - sd['new'], 4)
-                    samples.append(f"{sd['code']}: 旧={sd['original']} 新={sd['new']} 差={diff}")
-                for sd in s.get("sample_missing_in_new", []):
-                    samples.append(f"{sd['code']}: 旧={sd['original']} 新=— 差=—")
-                for sd in s.get("sample_missing_in_original", []):
-                    samples.append(f"{sd['code']}: 旧=— 新={sd['new']} 差=—")
-                rows.append((f, samples))
-            if not rows:
-                continue
-            parts.append(f'<h3>{ex}</h3>')
-            parts.append(
-                '<table border="1" cellpadding="6" cellspacing="0"'
-                ' style="border-collapse:collapse;">'
-            )
-            parts.append(
-                '<tr style="background:#f5f5f5;">'
-                '<th>字段</th><th>差异明细</th></tr>'
-            )
-            for fname, samples in rows:
-                sample_text = "<br>".join(samples) if samples else "—"
-                parts.append(
-                    f'<tr><td><b>{fname}</b></td>'
-                    f'<td style="font-size:12px;color:#666">'
-                    f'{sample_text}</td></tr>'
-                )
-            parts.append('</table>')
-        if not has_diff:
-            parts.append('<p>✅ 全部字段无差异</p>')
         return "\n".join(parts)
 
     @staticmethod
