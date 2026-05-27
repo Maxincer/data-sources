@@ -10,6 +10,7 @@ Modifier: 原始数据清洗规则汇总。
 
 import math
 import re
+from datetime import date, datetime
 from typing import Optional
 
 
@@ -45,7 +46,7 @@ CZCE_TICK_SIZE = {
 }
 
 
-def pad_czce_code(raw_code: str, ref_date: datetime.date = None) -> str:
+def pad_czce_code(raw_code: str, ref_date: date = None) -> str:
     """CZCE 3-digit to 4-digit: ZC605 -> ZC2605, ZC605.CZC -> ZC2605.CZC.
 
     Deterministic via listing horizon: valid contracts at any time span
