@@ -174,11 +174,11 @@ class Reporter:
             self._email_header(date_str),
             self._email_file_size_section(date_str),
         ]
+        html_parts.append(self._email_field_stats(stats, abnormal))
         for title, comp in comparisons:
             html_parts.append(
                 self._email_comparison_section(title, comp, date_str)
             )
-        html_parts.append(self._email_field_stats(stats, abnormal))
         html_parts.append(self._email_footer())
 
         msg = MIMEMultipart("alternative")
