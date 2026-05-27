@@ -4,8 +4,8 @@
 #   Production / crontab:          bash scripts/pipeline.sh [TRADE_DATE]
 #   Development:          DEV_MODE=1 bash scripts/pipeline.sh [TRADE_DATE]
 #
-# Log output goes to stdout/stderr. crontab handles redirection:
-#   45 16 * * * DEV_MODE=1 /path/scripts/pipeline.sh >> /mnt/e/logs/cron.log 2>&1
+# Log output goes to stdout/stderr. crontab/rutask handles redirection:
+#   rutask cron: "00 45 16 * * 1-5"
 
 # Ensure ~/.local/bin is on PATH (crontab may lack this)
 export PATH="$HOME/.local/bin:$PATH"
@@ -28,23 +28,17 @@ fi
 
 # ---- 时间门禁 ----
 CURRENT_HM=$(date +%H%M)
-if [ "$CURRENT_HM" -lt 1627 ]; then
-    echo "[$(date '+%F %T')] 当前 ${CURRENT_HM} < 1627，跳过 pipeline"
+if [ "$CURRENT_HM" -lt 1645 ]; then
+    echo "[$(date '+%F %T')] 当前 ${CURRENT_HM} < 1645，跳过 pipeline"
     exit 0
 fi
 
 # ---- 目标库参数（可通过环境变量覆盖） ----
-# 阶段一（默认）：写 exchange 过渡表
-# 阶段二：WRITER_TABLE=t_futures_info  WRITER_HOST=192.168.1.27  WRITER_DB=future_cn
-WRITER_HOST="${WRITER_HOST:-}"
-WRITER_DB="${WRITER_DB:-}"
+# 阶段二需设：WRITER_TABLE=t_futures_info  SKIP_TABLE_COMPARE=1
 WRITER_TABLE="${WRITER_TABLE:-}"
 WRITER_OPTS=""
-[ -n "$WRITER_HOST" ]  && WRITER_OPTS="$WRITER_OPTS --host $WRITER_HOST"
-[ -n "$WRITER_DB" ]    && WRITER_OPTS="$WRITER_OPTS --db $WRITER_DB"
 [ -n "$WRITER_TABLE" ] && WRITER_OPTS="$WRITER_OPTS --table $WRITER_TABLE"
 
-# 阶段二设置 SKIP_TABLE_COMPARE=1 跳过两表对比
 REPORTER_OPTS=""
 [ -n "${SKIP_TABLE_COMPARE:-}" ] && REPORTER_OPTS="--skip-table-compare"
 
@@ -68,7 +62,8 @@ fi
 SMTP_PASSWORD="NBnDH84qZHZWFrTC"
 export SMTP_PASSWORD
 SENDER="robot@wendao.fund"
-RECIPIENTS="fisher@wendao.fund,chendingzhong@wendao.fund,mxz@wendao.fund"
+#RECIPIENTS="fisher@wendao.fund,chendingzhong@wendao.fund,mxz@wendao.fund"
+RECIPIENTS="mxz@wendao.fund"
 
 # ---- 执行管线 ----
 echo "[$(date '+%F %T')] ===== pipeline started for ${TRADE_DATE} ====="
@@ -80,16 +75,6 @@ echo "[$(date '+%F %T')] Step 2/3: Writing..."
 ${RUN_WRITER} 2>&1 || echo "[WARN] Writer completed with errors"
 
 echo "[$(date '+%F %T')] Step 3/3: Reporting + email..."
-
-# 等待至 16:40，确保 201 上的 Wind 数据已更新
-NOW_S=$(date +%s)
-TARGET_S=$(date -d "16:40" +%s 2>/dev/null || date -d "16:40:00" +%s)
-if [ "$NOW_S" -lt "$TARGET_S" ]; then
-    WAIT=$((TARGET_S - NOW_S))
-    echo "[$(date '+%F %T')] 等待 ${WAIT}s 至 16:40..."
-    sleep "$WAIT"
-fi
-
 ${RUN_REPORTER} --sender "${SENDER}" --recipients "${RECIPIENTS}" ${REPORTER_OPTS} 2>&1
 
 STATUS=$?

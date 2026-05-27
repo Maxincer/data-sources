@@ -13,16 +13,28 @@ phases without modifying global state).
 """
 
 
+import os
 import pymysql
 
-# ---- Default config (local dev on server202) ----
-DB_CONFIG = {
-    "host": "192.168.1.202",
-    "user": "root",
-    "password": "root0808",
-    "database": "future_cn",
-    "charset": "utf8mb4",
-}
+
+if os.environ.get("DEV_MODE"):
+    # 开发环境（server202 / WSL）
+    DB_CONFIG = {
+        "host": "192.168.1.202",
+        "user": "root",
+        "password": "root0808",
+        "database": "future_cn",
+        "charset": "utf8mb4",
+    }
+else:
+    # 生产环境（db201 → MySQL 集群）
+    DB_CONFIG = {
+        "host": "192.168.1.27",
+        "user": "tools",
+        "password": "tools0512",
+        "database": "future_cn",
+        "charset": "utf8mb4",
+    }
 
 TABLE_NAME = "t_futures_info_exchange"
 
