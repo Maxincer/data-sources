@@ -638,14 +638,35 @@ class Verifier:
                 else:
                     cr.total_matched += 1
 
+        # ---- Summary aggregations ----
+        field_summary = {}
+        for ex, ex_results in field_results.items():
+            for fname, cr in ex_results.items():
+                if fname not in field_summary:
+                    field_summary[fname] = {
+                        "matched": 0, "diff": 0,
+                        "missing_a": 0, "missing_b": 0,
+                    }
+                s = cr.summary
+                field_summary[fname]["matched"] += s["matched"]
+                field_summary[fname]["diff"] += s["diff"]
+                field_summary[fname]["missing_a"] += s["missing_in_original"]
+                field_summary[fname]["missing_b"] += s["missing_in_new"]
+
         result = {
             "exchange_counts": exchange_counts,
             "field_diffs": {
                 ex: {f: r.summary for f, r in ex_results.items()}
                 for ex, ex_results in sorted(field_results.items())
             },
+            "field_summary": field_summary,
             "missing_records": missing_records,
             "extra_records": extra_records,
+            "missing_count": len(missing_records),
+            "extra_count": len(extra_records),
+            "matched_count": len(codes_a & codes_b),
+            "total_source_a": len(codes_a),
+            "total_source_b": len(codes_b),
             "summary": self._format_summary(
                 exchange_counts, field_results,
                 missing_records, extra_records, target_date,

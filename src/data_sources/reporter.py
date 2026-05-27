@@ -330,11 +330,9 @@ class Reporter:
         Structure:
           ## {title}
           ### contracts count
-          | 交易所 | source_a | source_b | 缺漏 | 多余 |
-            ❌ code=xxx, open=xxx, ...
+            totals + per-exchange table + 缺漏/多余明细
           ### groupby ex, field
-            **SHF open**
-              CU2606.SHF 原=xxx 新=xxx 差=xxx
+            field summary table + per-exchange per-field details
         """
         lines = [f"## {title}", ""]
 
@@ -342,6 +340,12 @@ class Reporter:
 
         # ---- contracts count ----
         lines.append("### contracts count")
+        lines.append("")
+        lines.append(
+            f"source_a: {comp.get('total_source_a',0)} 条, "
+            f"source_b: {comp.get('total_source_b',0)} 条, "
+            f"匹配: {comp.get('matched_count',0)} 条"
+        )
         lines.append("")
         lines.append("| 交易所 | source_a | source_b | 缺漏 | 多余 |")
         lines.append("| :--- | ---: | ---: | ---: | ---: |")
@@ -358,8 +362,10 @@ class Reporter:
         # Missing / extra records
         missing_records = comp.get("missing_records", [])
         extra_records = comp.get("extra_records", [])
-        if missing_records:
-            lines.append(f"**缺漏** (source_a有/source_b无, 共{len(missing_records)}条, 最多10条):")
+        mc = comp.get("missing_count", len(missing_records))
+        ecnt = comp.get("extra_count", len(extra_records))
+        if mc:
+            lines.append(f"**缺漏** (source_a有/source_b无, 共{mc}条, 最多10条):")
             for rec in missing_records[:10]:
                 code = rec.get("code", "?")
                 open_v = rec.get("open", "—")
@@ -367,8 +373,8 @@ class Reporter:
                 settle_v = rec.get("settle", "—")
                 lines.append(f"  ❌ code={code}, open={open_v}, close={close_v}, settle={settle_v}")
             lines.append("")
-        if extra_records:
-            lines.append(f"**多余** (source_b有/source_a无, 共{len(extra_records)}条, 最多10条):")
+        if ecnt:
+            lines.append(f"**多余** (source_b有/source_a无, 共{ecnt}条, 最多10条):")
             for rec in extra_records[:10]:
                 code = rec.get("code", "?")
                 open_v = rec.get("open", "—")
@@ -380,6 +386,22 @@ class Reporter:
         # ---- groupby ex, field ----
         lines.append("### groupby ex, field")
         lines.append("")
+
+        fs = comp.get("field_summary", {})
+        if fs:
+            lines.append("**字段差异汇总**:")
+            lines.append("")
+            lines.append("| 字段 | 匹配 | 差异 | 缺a | 缺b |")
+            lines.append("| :--- | ---: | ---: | ---: | ---: |")
+            for fname in _FULL_FIELDS:
+                s = fs.get(fname, {})
+                if s.get("diff", 0) == 0 and s.get("missing_a", 0) == 0 and s.get("missing_b", 0) == 0:
+                    continue
+                lines.append(
+                    f"| {fname} | {s.get('matched',0)} | {s.get('diff',0)} | "
+                    f"{s.get('missing_a',0)} | {s.get('missing_b',0)} |"
+                )
+            lines.append("")
 
         fd = comp.get("field_diffs", {})
         has_diff = False
@@ -404,9 +426,14 @@ class Reporter:
                     and s["missing_in_new"] == 0
                 ):
                     continue
-                lines.append(f"  **{ex} {field}**")
-                limit = None if s["diff"] < 10 else 10
-                for sd in s["sample_diffs"][:limit]:
+                diff_count = s.get("diff", 0)
+                limit = None if diff_count < 10 else 10
+                samples = s.get("sample_diffs", [])
+                missing_b = s.get("sample_missing_in_new", [])
+                missing_a = s.get("sample_missing_in_original", [])
+                total = diff_count + len(missing_a) + len(missing_b)
+                lines.append(f"  **{ex} {field}** (共{total}条):")
+                for sd in samples[:limit]:
                     diff = round(sd['original'] - sd['new'], 4) if isinstance(sd.get('original'), (int, float)) and isinstance(sd.get('new'), (int, float)) else "—"
                     lines.append(
                         f"    {sd['code']}:"
@@ -414,20 +441,20 @@ class Reporter:
                         f" 新={sd['new']}"
                         f" 差={diff}"
                     )
-                for sd in s.get("sample_missing_in_new", []):
+                for sd in missing_b:
                     lines.append(
                         f"    {sd['code']}:"
                         f" 原={sd['original']} 新=— 差=—"
                     )
-                for sd in s.get("sample_missing_in_original", []):
+                for sd in missing_a:
                     lines.append(
                         f"    {sd['code']}:"
                         f" 原=— 新={sd['new']} 差=—"
                     )
 
-        if not has_diff and not missing_records:
+        if not has_diff and not mc:
             lines.append("✅ 全部字段完全一致")
-        
+
         return "\n".join(lines)
 
     def _email_file_size_section(date_str: str) -> str:
