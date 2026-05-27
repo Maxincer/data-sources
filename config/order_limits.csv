@@ -63,11 +63,11 @@ DCE,v,聚氯乙烯,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
 DCE,v-F,聚氯乙烯月均价,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
 DCE,y,豆油,期货,1000,1000,1,tradingParam API + Wind WSD,Wind WSD确认
 # ===== GFEX =====
-GFEX,si,工业硅,期货,1000,1000,1,品种业务细则,
-GFEX,lc,碳酸锂,期货,1000,1000,1,品种业务细则,远月合约(LC2601+) min开仓=5手(品种公告)
-GFEX,ps,多晶硅,期货,1000,1000,1,品种业务细则,PS2601-2702 min=10手(广期所发〔2025〕420号)
-GFEX,pt,铂,期货,1000,1000,1,品种业务细则,
-GFEX,pd,钯,期货,1000,1000,1,品种业务细则,
+GFEX,si,工业硅,期货,1000,1000,1,Wind WSS,Wind WSS确认默认值
+GFEX,lc,碳酸锂,期货,1000,1000,5,Wind WSS,品种公告调整后Wind WSS确认全部合约=5
+GFEX,ps,多晶硅,期货,1000,1000,5,Wind WSS,品种公告调整后Wind WSS确认=5
+GFEX,pt,铂,期货,1000,1000,1,Wind WSS,Wind WSS确认
+GFEX,pd,钯,期货,1000,1000,1,Wind WSS,Wind WSS确认
 # ===== INE =====
 INE,sc,原油,期货,500,,1,交易管理办法,无市价指令
 INE,nr,20号胶,期货,500,,1,交易管理办法,无市价指令
