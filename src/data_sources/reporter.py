@@ -110,30 +110,33 @@ class Reporter:
         comp = {}
 
         if not skip_table_compare:
-            # Phase 1: 两表对比 + Wind API
-            comp = v.compare_all(target_date=date_str)
+            # Phase 1a: 两表对比（exchange vs Wind t_futures_info）
+            comp = v.compare_all(
+                target_date=date_str,
+                source_a="t_futures_info_exchange",
+                source_b="t_futures_info",
+            )
             ec = comp.get("exchange_counts", {})
             fd = comp.get("field_diffs", {})
             feishu_sections.append(
                 self._build_comparison_section(comp, date_str)
             )
-        else:
-            # Phase 2: 仅 Wind API 交叉验证
-            self.logger.info("skip_table_compare=True, skipping table comparison")
 
-        # Always run Wind API cross-validation
-        wind_comp = v.compare_with_wind_api(date_str)
-        if wind_comp.get("wind_available"):
+        # Phase 1b / Phase 2: Wind WSS 交叉验证
+        from data_sources.wind_client import fetch_wind_data
+        wind_data = fetch_wind_data(date_str)
+        wind_available = len(wind_data) > 0
+
+        if wind_available:
+            our_table = "t_futures_info" if skip_table_compare else "t_futures_info_exchange"
+            wind_comp = v.compare_all(
+                target_date=date_str,
+                source_a=our_table,
+                source_b=wind_data,
+            )
             feishu_sections.append(
                 self._build_wind_comparison_section(wind_comp)
             )
-            if email:
-                self.logger.info(
-                    "Wind cross-validation: %d/%d matched, %d diffs",
-                    wind_comp.get("matched_contracts", 0),
-                    wind_comp.get("total_contracts", 0),
-                    len(wind_comp.get("contract_diffs", [])),
-                )
 
         self._send_feishu_markdown(
             f"📊 数据验证报告 {date_str}",
@@ -186,7 +189,7 @@ class Reporter:
         # Always: field stats
         html_parts.append(self._email_field_stats(stats, abnormal))
         # Always: Wind cross-validation
-        if wind_comp and wind_comp.get("wind_available"):
+        if wind_comp:
             html_parts.append(
                 self._email_wind_section(wind_comp)
             )
@@ -413,68 +416,94 @@ class Reporter:
 
     @staticmethod
     def _build_wind_comparison_section(wind_comp: dict) -> str:
-        """Wind API cross-validation section for Feishu."""
-        if not wind_comp.get("wind_available"):
+        """Wind WSS cross-validation section for Feishu."""
+        if not wind_comp or not wind_comp.get("exchange_counts"):
             return "⚠️ Wind API 不可用，跳过交叉验证"
 
         lines = []
+        # Total counts
+        ec = wind_comp["exchange_counts"]
+        total_ours = sum(v.get("original", 0) for v in ec.values())
+        total_wind = sum(v.get("new", 0) for v in ec.values())
         lines.append(
-            f"**Wind API 交叉验证** "
-            f"({wind_comp['matched_contracts']}/"
-            f"{wind_comp['total_contracts']} 合约)"
+            f"**Wind WSS 交叉验证** "
+            f"(ours={total_ours}, wind={total_wind})"
         )
         lines.append("")
 
-        field_stats = wind_comp.get("field_stats", {})
-        has_diff = any(s["diff"] > 0 for s in field_stats.values())
+        # Missing / extra
+        missing = wind_comp.get("missing_records", [])
+        extra = wind_comp.get("extra_records", [])
+        if missing:
+            lines.append(f"**Wind 无数据** ({len(missing)} 个):")
+            for m in missing[:10]:
+                lines.append(f"  ⚠️ {m.get('code', m)}")
+            if len(missing) > 10:
+                lines.append(f"  ... 还有 {len(missing) - 10} 个")
+            lines.append("")
+        if extra:
+            lines.append(f"**仅 Wind 有** ({len(extra)} 个):")
+            for e in extra[:5]:
+                lines.append(f"  ➕ {e.get('code', e)}")
+            lines.append("")
 
-        if not has_diff and not wind_comp.get("wind_unavailable"):
+        # Field diffs (merged across exchanges)
+        field_diffs = wind_comp.get("field_diffs", {})
+        if not field_diffs:
+            if not missing:
+                lines.append("✅ 全部字段完全一致")
+            return "\n".join(lines)
+
+        # Merge field stats across exchanges
+        merged = {}
+        for ex, ex_diffs in field_diffs.items():
+            for fname, s in ex_diffs.items():
+                if fname not in merged:
+                    merged[fname] = {"matched": 0, "diff": 0, "max_deviation_pct": 0, "samples": []}
+                merged[fname]["matched"] += s.get("matched", 0)
+                merged[fname]["diff"] += s.get("diff", 0)
+                merged[fname]["max_deviation_pct"] = max(
+                    merged[fname]["max_deviation_pct"],
+                    s.get("max_deviation_pct", 0),
+                )
+                for sd in s.get("sample_diffs", [])[:3]:
+                    merged[fname]["samples"].append(sd)
+
+        has_diff = any(s["diff"] > 0 for s in merged.values())
+        if not has_diff and not missing:
             lines.append("✅ 全部字段完全一致")
             return "\n".join(lines)
 
         lines.append("**分字段差异统计**:")
         lines.append("")
-        lines.append(
-            "| 字段 | 匹配 | 差异 | 最大偏差 | 均值偏差 |"
-        )
-        lines.append(
-            "| :--- | ---: | ---: | ---: | ---: |"
-        )
-        for fname, s in field_stats.items():
-            avg_dev = (
-                s["sum_deviation"] / s["diff"]
-                if s["diff"] > 0 else 0.0
-            )
+        lines.append("| 字段 | 匹配 | 差异 | 最大偏差 |")
+        lines.append("| :--- | ---: | ---: | ---: |")
+        for fname, s in sorted(merged.items()):
             icon = "🔴" if s["diff"] > 0 else "✅"
             lines.append(
                 f"| {icon} {fname} | {s['matched']} | {s['diff']} |"
-                f" {s['max_deviation']:.2f}% |"
-                f" {avg_dev:.2f}% |"
+                f" {s['max_deviation_pct']:.2f}% |"
             )
 
-        contract_diffs = wind_comp.get("contract_diffs", [])
-        if contract_diffs:
+        # Sample diffs (all fields, limited)
+        all_samples = []
+        for fname, s in merged.items():
+            for sd in s.get("samples", []):
+                all_samples.append({**sd, "field": fname})
+        all_samples.sort(key=lambda x: x.get("deviation_pct", 0), reverse=True)
+        if all_samples:
             lines.append("")
-            lines.append("**差异明细** (最多 20 条):")
-            for d in contract_diffs[:20]:
+            lines.append("**差异明细** (最多 15 条):")
+            for d in all_samples[:15]:
                 lines.append(
-                    f"  → {d['code']}.{d['field']}: "
-                    f"ours={d['ours']} wind={d['wind']}"
-                    f" 偏差 {d['deviation_pct']:.2f}%"
+                    f"  → {d.get('code','?')}.{d.get('field','?')}: "
+                    f"ours={d.get('original','?')} wind={d.get('new','?')}"
+                    f" 偏差 {d.get('deviation_pct',0):.2f}%"
                 )
-            if len(contract_diffs) > 20:
-                lines.append(f"  ... 还有 {len(contract_diffs) - 20} 条")
+            if len(all_samples) > 15:
+                lines.append(f"  ... 还有 {len(all_samples) - 15} 条")
 
-        unavailable = wind_comp.get("wind_unavailable", [])
-        if unavailable:
-            lines.append("")
-            lines.append(
-                f"**Wind 无数据** ({len(unavailable)} 个):"
-            )
-            for c in unavailable[:10]:
-                lines.append(f"  ⚠️ {c}")
-            if len(unavailable) > 10:
-                lines.append(f"  ... 还有 {len(unavailable) - 10} 个")
+        return "\n".join(lines)
 
         return "\n".join(lines)
 
@@ -736,17 +765,42 @@ class Reporter:
 
     @staticmethod
     def _email_wind_section(wind_comp: dict) -> str:
-        """Wind API 交叉验证邮件章节 (HTML)."""
-        parts = ['<h2>🌐 Wind API 交叉验证</h2>']
-        mc = wind_comp.get("matched_contracts", 0)
-        tc = wind_comp.get("total_contracts", 0)
-        parts.append(
-            f'<p>匹配: {mc}/{tc} 合约</p>'
-        )
+        """Wind WSS 交叉验证邮件章节 (HTML)."""
+        parts = ['<h2>🌐 Wind WSS 交叉验证</h2>']
+        if not wind_comp or not wind_comp.get("exchange_counts"):
+            parts.append('<p>⚠️ Wind WSS 不可用</p>')
+            return "\n".join(parts)
 
-        field_stats = wind_comp.get("field_stats", {})
-        has_diff = any(s["diff"] > 0 for s in field_stats.values())
-        if not has_diff and not wind_comp.get("wind_unavailable"):
+        ec = wind_comp["exchange_counts"]
+        total_ours = sum(v.get("original", 0) for v in ec.values())
+        total_wind = sum(v.get("new", 0) for v in ec.values())
+        parts.append(f'<p>ours={total_ours}, wind={total_wind}</p>')
+
+        missing = wind_comp.get("missing_records", [])
+        if missing:
+            parts.append(f'<p>Wind 无数据 ({len(missing)} 个)</p>')
+
+        field_diffs = wind_comp.get("field_diffs", {})
+        if not field_diffs:
+            if not missing:
+                parts.append('<p>✅ 全部字段完全一致</p>')
+            return "\n".join(parts)
+
+        # Merge field stats
+        merged = {}
+        for ex, ex_diffs in field_diffs.items():
+            for fname, s in ex_diffs.items():
+                if fname not in merged:
+                    merged[fname] = {"matched": 0, "diff": 0, "max_deviation_pct": 0}
+                merged[fname]["matched"] += s.get("matched", 0)
+                merged[fname]["diff"] += s.get("diff", 0)
+                merged[fname]["max_deviation_pct"] = max(
+                    merged[fname]["max_deviation_pct"],
+                    s.get("max_deviation_pct", 0),
+                )
+
+        has_diff = any(s["diff"] > 0 for s in merged.values())
+        if not has_diff and not missing:
             parts.append('<p>✅ 全部字段完全一致</p>')
             return "\n".join(parts)
 
@@ -758,52 +812,17 @@ class Reporter:
         parts.append(
             '<tr style="background:#f5f5f5;">'
             '<th>字段</th><th>匹配</th><th>差异</th>'
-            '<th>最大偏差</th><th>均值偏差</th></tr>'
+            '<th>最大偏差</th></tr>'
         )
-        for fname, s in field_stats.items():
-            avg_dev = (
-                s["sum_deviation"] / s["diff"]
-                if s["diff"] > 0 else 0.0
-            )
+        for fname, s in sorted(merged.items()):
             icon = "🔴" if s["diff"] > 0 else "✅"
             parts.append(
                 f'<tr><td>{icon} {fname}</td>'
                 f'<td style="text-align:right">{s["matched"]}</td>'
                 f'<td style="text-align:right">{s["diff"]}</td>'
-                f'<td style="text-align:right">{s["max_deviation"]:.2f}%</td>'
-                f'<td style="text-align:right">{avg_dev:.2f}%</td></tr>'
+                f'<td style="text-align:right">{s["max_deviation_pct"]:.2f}%</td></tr>'
             )
         parts.append('</table>')
-
-        contract_diffs = wind_comp.get("contract_diffs", [])
-        if contract_diffs:
-            parts.append('<h3>差异明细 (最多 20 条)</h3>')
-            parts.append('<ul>')
-            for d in contract_diffs[:20]:
-                parts.append(
-                    f'<li>{d["code"]}.{d["field"]}: '
-                    f'ours={d["ours"]} wind={d["wind"]} '
-                    f'偏差 {d["deviation_pct"]:.2f}%</li>'
-                )
-            if len(contract_diffs) > 20:
-                parts.append(
-                    f'<li>... 还有 {len(contract_diffs) - 20} 条</li>'
-                )
-            parts.append('</ul>')
-
-        unavailable = wind_comp.get("wind_unavailable", [])
-        if unavailable:
-            parts.append(
-                f'<p>Wind 无数据 ({len(unavailable)} 个)</p>'
-            )
-            parts.append('<ul>')
-            for c in unavailable[:10]:
-                parts.append(f'<li>⚠️ {c}</li>')
-            if len(unavailable) > 10:
-                parts.append(
-                    f'<li>... 还有 {len(unavailable) - 10} 个</li>'
-                )
-            parts.append('</ul>')
 
         return "\n".join(parts)
 

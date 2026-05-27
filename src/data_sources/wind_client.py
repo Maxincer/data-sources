@@ -1,94 +1,114 @@
-"""Minimal Wind API client via cpp_py RPC (no WindPy, no dataproc).
+"""Wind API client via cpp_py WSS (batch snapshot).
 
-Uses cpp_py.w.set_server() + w.wsd() to call Wind RPC at 192.168.2.9:3801.
-Only available on machines with cpp_py installed (e.g. db201).
-Gracefully unavailable elsewhere.
+Uses cpp_py.w.wss() to fetch full-market futures data for a single date
+in one RPC call. Only available on machines with cpp_py installed
+(e.g. db201, server202).
 """
 
-import re
+import os
 from typing import Optional
 
-from data_sources.modifier import czc_to_wind_code  # noqa: F401
+from data_sources.modifier import czc_to_wind_code, pad_czce_code
+
+# Wind RPC endpoint
+_RPC_HOST = "192.168.2.9"
+_RPC_PORT = 3801
+
+# Default fields matching t_futures_info.py
+_WSS_FIELDS = [
+    "open", "high", "low", "close", "volume",
+    "amt", "oi", "settle", "maxup", "maxdown",
+    "if_basis", "long_margin", "short_margin", "minoq", "maxoq",
+]
 
 
-class WindClient:
-    """Thin wrapper around cpp_py.w.wsd() for futures daily data.
+def _ensure_connected() -> bool:
+    """Set Wind RPC server and check connectivity."""
+    try:
+        import cpp_py
+        cpp_py.w.set_server(f"{_RPC_HOST}:{_RPC_PORT}")
+        return cpp_py.w.is_connected()
+    except Exception:
+        return False
 
-    Usage:
-        client = WindClient()
-        if client.available:
-            data = client.get_wsd("CU2606.SHF", "20260522",
-                                  ["open", "close", "volume"])
+
+def fetch_wind_data(
+    target_date: str,
+    fields: Optional[list[str]] = None,
+) -> dict[str, dict[str, float]]:
+    """Fetch Wind WSS snapshot for all active futures contracts.
+
+    Mirrors t_futures_info.py's contract selection logic:
+      1. SELECT code FROM t_futures WHERE ipo <= date AND lasttrade >= date
+      2. CZCE codes: 4-digit → 3-digit for Wind query, restore afterwards
+      3. Single wss() call for all codes + fields
+
+    Args:
+        target_date: YYYYMMDD
+        fields: fields to fetch, default=_WSS_FIELDS (15 fields)
+
+    Returns:
+        {code: {field: float}} — empty dict if Wind unavailable.
     """
+    if not _ensure_connected():
+        return {}
 
-    # Wind RPC 配置（固定值，与 data-crawler 一致）
-    _RPC_HOST = "192.168.2.9"
-    _RPC_PORT = 3801
+    if fields is None:
+        fields = list(_WSS_FIELDS)
 
-    def __init__(self):
-        self.available = False
-        self._wsd = None  # 缓存 wsd 函数引用，避免每次属性查找
-        try:
-            import cpp_py  # noqa: F811
-            cpp_py.w.set_server(f"{self._RPC_HOST}:{self._RPC_PORT}")
-            if cpp_py.w.is_connected():
-                self._wsd = cpp_py.w.wsd
-                self.available = True
-        except Exception:
-            pass
+    # ---- Get active contracts ----
+    from data_sources.db import get_connection
 
-    def get_wsd(
-        self,
-        code: str,
-        date: str,
-        fields: list[str],
-    ) -> Optional[dict]:
-        """Call Wind WSD for one contract on one date via RPC.
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT i.code
+                FROM future_cn.t_futures i
+                WHERE i.ipo_date <= %s AND i.lasttrade_date >= %s
+            """, (target_date, target_date))
+            db_codes = [r[0] for r in cur.fetchall()]
+    finally:
+        conn.close()
 
-        Args:
-            code: 合约代码，如 "CU2606.SHF"
-            date: 交易日 YYYYMMDD，如 "20260522"
-            fields: 字段列表，如 ["open","high","low","close"]
+    if not db_codes:
+        return {}
 
-        Returns:
-            {field: value} dict, or None if unavailable / no data.
-        """
-        if not self.available:
-            return None
+    # ---- CZCE 4→3 for Wind query ----
+    wind_codes = [czc_to_wind_code(c) for c in db_codes]
+    code_map = dict(zip(wind_codes, db_codes))  # wind_code → db_code
 
-        ec, _es, df = self._wsd(
-            code,
-            ",".join(fields),
-            date,
-            date,
-            "futinstrtype=1",
-        )
-        if ec != 0 or df is None or df.empty:
-            return None
+    # ---- Single batch wss call ----
+    import cpp_py
 
-        row = df.iloc[0]
-        out = {}
+    codes_str = ",".join(wind_codes)
+    fields_str = ",".join(fields)
+    options = f"tradeDate={target_date};futinstrtype=1;code_col=code"
+
+    ec, es, df = cpp_py.w.wss(codes_str, fields_str, options)
+    if ec != 0 or df is None or df.empty:
+        return {}
+
+    # ---- Parse DataFrame → {db_code: {field: float}} ----
+    result: dict[str, dict[str, float]] = {}
+    for _, row in df.iterrows():
+        wind_code = row.get("code", "")
+        if not wind_code:
+            continue
+        db_code = code_map.get(wind_code, wind_code)
+
+        values: dict[str, float] = {}
         for f in fields:
             val = row.get(f)
-            if val is not None:
-                try:
-                    v = float(val)
-                except (TypeError, ValueError):
-                    continue
-                if v != v:  # NaN check (NaN != NaN)
-                    continue
-                out[f] = v
-        return out if out else None
+            try:
+                v = float(val)
+            except (TypeError, ValueError):
+                continue
+            if v != v:  # NaN check
+                continue
+            values[f] = v
 
-    def batch_wsd(
-        self,
-        codes: list[str],
-        date: str,
-        fields: list[str],
-    ) -> dict[str, Optional[dict]]:
-        """Batch WSD for multiple contracts on one date.
+        if values:
+            result[db_code] = values
 
-        Returns:
-            {code: {field: value}} — slow path, one RPC call per code.
-        """
-        return {code: self.get_wsd(code, date, fields) for code in codes}
+    return result

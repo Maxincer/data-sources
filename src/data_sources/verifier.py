@@ -474,226 +474,177 @@ class Verifier:
                 return "✅ 可允许: 量小无OHLC"
         return "⚠️ 需核查"
 
-    # -----------------------------------------------------------------
-    # Comprehensive cross-table comparison
-    # -----------------------------------------------------------------
-
     def compare_all(
         self,
-        target_date: Optional[str] = None,
-    ) -> Dict:
-        """
-        Comprehensive comparison between t_futures_info (original) and
-        t_futures_info_exchange (new). Checks:
+        target_date: str,
+        source_a,
+        source_b,
+    ) -> dict:
+        """Compare two data sources field-by-field for a given date.
 
-        1. Record counts per exchange
-        2. Records missing from new table
-        3. Records extra in new table
-        4. Field-level differences for matching records
-             (round to 4 decimal places; any difference → flagged)
-
-        Args:
-            target_date: YYYYMMDD date to filter. None = all dates.
+        Each source can be:
+          - str: MySQL table name in future_cn database
+          - dict: in-memory data {code: {field: value}}
 
         Returns:
-            Dict with keys:
-              - exchange_counts: {exchange: {original, new, missing_in_new, extra_in_new}}
-              - field_diffs:    {field: {matched, diff, max_deviation_pct, sample_diffs}}
-              - missing_records: [{code, date}] (in orig but not new)
-              - extra_records:   [{code, date}] (in new but not orig)
-              - summary:         overall summary text
+            dict with keys: exchange_counts, field_diffs, missing_records,
+            extra_records, summary
         """
-        dt = None
-        if target_date:
-            dt = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:8]}"
-
-        # --- (A) 从两个服务器分别拉 (code, date) 集合，Python 做合并匹配 ---
-        def _fetch_all_codes(conn_fn, table, date_filter):
-            conn = conn_fn()
-            try:
-                with conn.cursor() as cur:
-                    sql = f"""
-                        SELECT code, date
-                        FROM `future_cn`.{table}
-                        WHERE 1=1 {date_filter}
-                        ORDER BY code, date
-                    """
-                    cur.execute(sql)
-                    return cur.fetchall()
-            finally:
-                conn.close()
-
-        date_filter_orig = f"AND date = '{dt}'" if dt else ""
-        date_filter_new = f"AND date = '{dt}'" if dt else ""
-
-        orig_rows = _fetch_all_codes(self._get_conn_orig, ORIGINAL_TABLE, date_filter_orig)
-        new_rows = _fetch_all_codes(self._get_conn, NEW_TABLE, date_filter_new)
-
-        def _fmt_dt(d):
-            """Normalize date to YYYY-MM-DD string."""
-            s = str(d).replace("-", "")
-            return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
-
-        orig_set = {(r["code"], _fmt_dt(r["date"])) for r in orig_rows}
-        new_set = {(r["code"], _fmt_dt(r["date"])) for r in new_rows}
-
-        matched_set = orig_set & new_set
-        missing_records = [{"code": c, "date": d} for c, d in sorted(orig_set - new_set)]
-        extra_records = [{"code": c, "date": d} for c, d in sorted(new_set - orig_set)]
-
-        # --- (B) Exchange-level count summary ---
-        exchange_counts = {}
-        for rec in missing_records:
-            ex = rec["code"].rsplit(".", 1)[-1] if "." in rec["code"] else "?"
-            exchange_counts.setdefault(ex, {
-                "original": 0, "new": 0,
-                "missing_in_new": 0, "extra_in_new": 0,
-            })["missing_in_new"] += 1
-        for rec in extra_records:
-            ex = rec["code"].rsplit(".", 1)[-1] if "." in rec["code"] else "?"
-            exchange_counts.setdefault(ex, {
-                "original": 0, "new": 0,
-                "missing_in_new": 0, "extra_in_new": 0,
-            })["extra_in_new"] += 1
-
-        def _count_by_exchange(conn_fn, table, date_filter):
-            conn = conn_fn()
-            try:
-                with conn.cursor() as cur:
-                    cur.execute(f"""
-                        SELECT SUBSTRING_INDEX(code, '.', -1) AS ex,
-                               COUNT(*) AS cnt
-                        FROM `future_cn`.{table}
-                        WHERE 1=1 {date_filter}
-                        GROUP BY ex
-                    """)
-                    return {r["ex"]: r["cnt"] for r in cur.fetchall()}
-            finally:
-                conn.close()
-
-        orig_counts = _count_by_exchange(self._get_conn_orig, ORIGINAL_TABLE, date_filter_orig)
-        new_counts = _count_by_exchange(self._get_conn, NEW_TABLE, date_filter_new)
-
-        for ex, cnt in orig_counts.items():
-            exchange_counts.setdefault(ex, {
-                "original": 0, "new": 0,
-                "missing_in_new": 0, "extra_in_new": 0,
-            })["original"] = cnt
-        for ex, cnt in new_counts.items():
-            exchange_counts.setdefault(ex, {
-                "original": 0, "new": 0,
-                "missing_in_new": 0, "extra_in_new": 0,
-            })["new"] = cnt
-
-        # --- (C) Field-level comparison on matched records ---
         fields = [
             "open", "high", "low", "close", "volume",
             "amt", "oi", "settle", "maxup", "maxdown",
             "if_basis", "long_margin", "short_margin", "minoq", "maxoq",
         ]
-        field_results: Dict[str, Dict[str, CompareResult]] = {}
 
-        if matched_set:
-            code_date_list = sorted(matched_set)
-            col_list = ", ".join(fields)
-            for cd_start in range(0, len(code_date_list), 500):
-                batch = code_date_list[cd_start:cd_start + 500]
-                conditions = " OR ".join([
-                    f"(code = '{c}' AND date = '{d}')"
-                    for c, d in batch
-                ])
-
-                # Fetch original table data from 201
-                orig_data = {}
-                orig_conn = self._get_conn_orig()
+        # ---- Normalize sources -> {(code, date_str): {field: float}} ----
+        def _load_source(source):
+            if isinstance(source, dict):
+                result = {}
+                for code, row in source.items():
+                    r = {}
+                    for f in fields:
+                        v = row.get(f)
+                        if v is not None:
+                            try:
+                                r[f] = float(v)
+                            except (TypeError, ValueError):
+                                pass
+                    if r:
+                        result[(code, target_date)] = r
+                return result
+            else:
+                from data_sources.db import get_connection
+                conn = get_connection()
                 try:
-                    with orig_conn.cursor() as cur:
+                    dt = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:8]}"
+                    col_list = ", ".join(fields)
+                    with conn.cursor() as cur:
                         cur.execute(f"""
                             SELECT code, date, {col_list}
-                            FROM `future_cn`.{ORIGINAL_TABLE}
-                            WHERE {conditions}
-                        """)
+                            FROM `future_cn`.{source}
+                            WHERE date = %s
+                        """, (dt,))
+                        result = {}
                         for row in cur.fetchall():
-                            k = (row["code"], str(row["date"]))
-                            orig_data[k] = row
+                            r = {}
+                            for f in fields:
+                                v = row.get(f)
+                                if v is not None:
+                                    try:
+                                        r[f] = float(v)
+                                    except (TypeError, ValueError):
+                                        pass
+                            if r:
+                                d = str(row["date"]).replace("-", "")
+                                d = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+                                result[(row["code"], d)] = r
+                        return result
                 finally:
-                    orig_conn.close()
+                    conn.close()
 
-                # Fetch new table data from 202
-                new_data = {}
-                new_conn = self._get_conn()
-                try:
-                    with new_conn.cursor() as cur:
-                        cur.execute(f"""
-                            SELECT code, date, {col_list}
-                            FROM `future_cn`.{NEW_TABLE}
-                            WHERE {conditions}
-                        """)
-                        for row in cur.fetchall():
-                            k = (row["code"], str(row["date"]))
-                            new_data[k] = row
-                finally:
-                    new_conn.close()
+        data_a = _load_source(source_a)
+        data_b = _load_source(source_b)
 
-                for key in batch:
-                    o_row = orig_data.get(key)
-                    n_row = new_data.get(key)
-                    if not o_row or not n_row:
-                        continue
-                    code = key[0]
-                    date = self._format_date(key[1])
-                    ex = code.rsplit(".", 1)[-1] if "." in code else "?"
+        # ---- (A) Matching / missing / extra ----
+        codes_a = {k[0] for k in data_a}
+        codes_b = {k[0] for k in data_b}
+        missing = codes_a - codes_b
+        extra = codes_b - codes_a
 
-                    if ex not in field_results:
-                        field_results[ex] = {
-                            f: CompareResult(f) for f in fields
-                        }
+        missing_records = [{"code": c} for c in sorted(missing)]
+        extra_records = [{"code": c} for c in sorted(extra)]
 
-                    for field in fields:
-                        ov = o_row.get(field)
-                        nv = n_row.get(field)
-                        cr = field_results[ex][field]
+        exchange_counts = {}
+        for c in missing:
+            ex = c.rsplit(".", 1)[-1] if "." in c else "?"
+            exchange_counts.setdefault(ex, {
+                "original": 0, "new": 0,
+                "missing_in_new": 0, "extra_in_new": 0,
+            })["missing_in_new"] += 1
+        for c in extra:
+            ex = c.rsplit(".", 1)[-1] if "." in c else "?"
+            exchange_counts.setdefault(ex, {
+                "original": 0, "new": 0,
+                "missing_in_new": 0, "extra_in_new": 0,
+            })["extra_in_new"] += 1
+        for c in codes_a:
+            ex = c.rsplit(".", 1)[-1] if "." in c else "?"
+            exchange_counts.setdefault(ex, {
+                "original": 0, "new": 0,
+                "missing_in_new": 0, "extra_in_new": 0,
+            })["original"] = exchange_counts[ex]["original"] + 1
+        for c in codes_b:
+            ex = c.rsplit(".", 1)[-1] if "." in c else "?"
+            exchange_counts.setdefault(ex, {
+                "original": 0, "new": 0,
+                "missing_in_new": 0, "extra_in_new": 0,
+            })["new"] = exchange_counts[ex]["new"] + 1
 
-                        if ov is None and nv is None:
-                            continue
-                        if ov is None and nv is not None:
-                            cr.total_missing_original += 1
-                            if len(cr.sample_missing_in_original) < 5:
-                                cr.sample_missing_in_original.append({
-                                    "code": code, "date": date,
-                                    "original": None, "new": round(float(nv), 4),
-                                })
-                            continue
-                        if ov is not None and nv is None:
-                            cr.total_missing_new += 1
-                            oa = o_row.get("amt")
-                            if field == "amt" or oa is None or float(oa) != 0:
-                                cr.total_abnormal_missing_new += 1
-                            if len(cr.sample_missing_in_new) < 5:
-                                cr.sample_missing_in_new.append({
-                                    "code": code, "date": date,
-                                    "original": round(float(ov), 4), "new": None,
-                                })
-                            continue
+        # ---- (B) Field-level comparison ----
+        field_results = {}
+        matched = codes_a & codes_b
 
-                        ov = round(float(ov), 4)
-                        nv = round(float(nv), 4)
+        for code in sorted(matched):
+            a_row = data_a.get((code, target_date), {})
+            # Try different date format
+            if not a_row:
+                for k in data_a:
+                    if k[0] == code:
+                        a_row = data_a[k]
+                        break
+            b_row = data_b.get((code, target_date), {})
+            if not b_row:
+                for k in data_b:
+                    if k[0] == code:
+                        b_row = data_b[k]
+                        break
+            if not a_row or not b_row:
+                continue
 
-                        if ov != nv:
-                            cr.total_diff += 1
-                            max_abs = max(abs(ov), abs(nv))
-                            deviation = abs(ov - nv) / max_abs * 100 if max_abs > 0 else 0.0
-                            cr.max_deviation = max(cr.max_deviation, deviation)
-                            if len(cr.sample_diffs) < 10:
-                                cr.sample_diffs.append({
-                                    "code": code,
-                                    "date": date,
-                                    "original": ov,
-                                    "new": nv,
-                                    "deviation_pct": round(deviation, 4),
-                                })
-                        else:
-                            cr.total_matched += 1
+            ex = code.rsplit(".", 1)[-1] if "." in code else "?"
+            if ex not in field_results:
+                field_results[ex] = {f: CompareResult(f) for f in fields}
+
+            for field in fields:
+                av = a_row.get(field)
+                bv = b_row.get(field)
+                cr = field_results[ex][field]
+
+                if av is None and bv is None:
+                    continue
+                if av is None and bv is not None:
+                    cr.total_missing_original += 1
+                    if len(cr.sample_missing_in_original) < 5:
+                        cr.sample_missing_in_original.append({
+                            "code": code, "date": target_date,
+                            "original": None, "new": round(bv, 4),
+                        })
+                    continue
+                if av is not None and bv is None:
+                    cr.total_missing_new += 1
+                    if len(cr.sample_missing_in_new) < 5:
+                        cr.sample_missing_in_new.append({
+                            "code": code, "date": target_date,
+                            "original": round(av, 4), "new": None,
+                        })
+                    continue
+
+                av = round(av, 4)
+                bv = round(bv, 4)
+
+                if av != bv:
+                    cr.total_diff += 1
+                    max_abs = max(abs(av), abs(bv))
+                    deviation = abs(av - bv) / max_abs * 100 if max_abs > 0 else 0.0
+                    cr.max_deviation = max(cr.max_deviation, deviation)
+                    if len(cr.sample_diffs) < 10:
+                        cr.sample_diffs.append({
+                            "code": code, "date": target_date,
+                            "original": av, "new": bv,
+                            "deviation_pct": round(deviation, 4),
+                        })
+                else:
+                    cr.total_matched += 1
 
         result = {
             "exchange_counts": exchange_counts,
@@ -709,249 +660,6 @@ class Verifier:
             ),
         }
         return result
-
-    # -----------------------------------------------------------------
-    # Wind API cross-validation (phase 1 & 2)
-    # -----------------------------------------------------------------
-
-    def compare_with_wind_api(
-        self,
-        target_date: str,
-        table: str = NEW_TABLE,
-        fields: Optional[list[str]] = None,
-    ) -> dict:
-        """Compare our table data against Wind API for cross-validation.
-
-        Queries `t_futures` for active contracts, fetches Wind WSD data
-        for each, then compares field-by-field against our table.
-
-        Args:
-            target_date: YYYYMMDD
-            table: our table to check against
-            fields: fields to compare, default = all 12 price fields
-
-        Returns:
-            {
-                "wind_available": bool,
-                "total_contracts": int,
-                "matched_contracts": int,
-                "contract_diffs": [{code, field, ours, wind, diff_pct}],
-                "field_stats": {field: {matched, diff, max_deviation}},
-                "wind_unavailable": [],  # contracts Wind had no data for
-                "summary": str,
-            }
-        """
-        if fields is None:
-            fields = [
-                "open", "high", "low", "close", "volume",
-                "amt", "oi", "settle", "maxup", "maxdown",
-                "if_basis", "long_margin", "short_margin", "minoq", "maxoq",
-            ]
-
-        from data_sources.modifier import czc_to_wind_code
-        from data_sources.wind_client import WindClient
-
-        client = WindClient()
-        if not client.available:
-            return {
-                "wind_available": False,
-                "summary": "⚠️ Wind API 不可用，跳过交叉验证",
-            }
-
-        dt = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:8]}"
-
-        # 1) Fetch active contracts from t_futures
-        conn = self._get_conn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(f"""
-                    SELECT code
-                    FROM future_cn.t_futures
-                    WHERE ipo_date <= %s AND lasttrade_date >= %s
-                    ORDER BY code
-                """, (dt, dt))
-                all_codes = [r["code"] for r in cur.fetchall()]
-        finally:
-            conn.close()
-
-        # 2) Fetch our data for target_date
-        our_data: dict[str, dict] = {}
-        code_col = "code"
-        conn = self._get_conn()
-        try:
-            with conn.cursor() as cur:
-                col_list = ", ".join(["code"] + fields)
-                cur.execute(f"""
-                    SELECT {col_list}
-                    FROM future_cn.{table}
-                    WHERE date = %s
-                """, (dt,))
-                for row in cur.fetchall():
-                    code = row["code"]
-                    our_data[code] = {
-                        f: row[f] for f in fields
-                    }
-        finally:
-            conn.close()
-
-        # 3) For each contract, fetch Wind data & compare
-        field_stats: dict[str, dict] = {
-            f: {"matched": 0, "diff": 0, "total": 0,
-                "sum_deviation": 0.0, "max_deviation": 0.0,
-                "samples": []}
-            for f in fields
-        }
-        contract_diffs: list[dict] = []
-        wind_unavailable: list[str] = []
-        no_match_count = 0
-
-        for code in all_codes:
-            wind_code = czc_to_wind_code(code)
-            wind = client.get_wsd(wind_code, target_date, fields)
-            if wind is None:
-                wind_unavailable.append(code)
-                continue
-
-            ours = our_data.get(code)
-            if ours is None:
-                no_match_count += 1
-                continue
-
-            for f in fields:
-                ov = ours.get(f)
-                wv = wind.get(f)
-                field_stats[f]["total"] += 1
-
-                if ov is None or wv is None:
-                    field_stats[f]["diff"] += 1
-                    continue
-
-                try:
-                    ov = float(ov)
-                    wv = float(wv)
-                except (TypeError, ValueError):
-                    field_stats[f]["diff"] += 1
-                    continue
-
-                if ov == 0 and wv == 0:
-                    field_stats[f]["matched"] += 1
-                    continue
-
-                max_abs = max(abs(ov), abs(wv))
-                if max_abs == 0:
-                    field_stats[f]["matched"] += 1
-                    continue
-
-                deviation = abs(ov - wv) / max_abs * 100
-
-                if deviation > 0.01:  # tolerance 0.01%
-                    field_stats[f]["diff"] += 1
-                    field_stats[f]["sum_deviation"] += deviation
-                    if deviation > field_stats[f]["max_deviation"]:
-                        field_stats[f]["max_deviation"] = deviation
-                    if len(field_stats[f]["samples"]) < 10:
-                        field_stats[f]["samples"].append({
-                            "code": code,
-                            "ours": ov,
-                            "wind": wv,
-                            "deviation_pct": round(deviation, 4),
-                        })
-                    contract_diffs.append({
-                        "code": code,
-                        "field": f,
-                        "ours": ov,
-                        "wind": wv,
-                        "deviation_pct": round(deviation, 4),
-                    })
-                else:
-                    field_stats[f]["matched"] += 1
-
-        matched_count = len(all_codes) - len(wind_unavailable) - no_match_count
-        summary = self._format_wind_summary(
-            target_date, all_codes, matched_count,
-            wind_unavailable, field_stats, contract_diffs,
-        )
-
-        return {
-            "wind_available": True,
-            "total_contracts": len(all_codes),
-            "wind_unavailable": wind_unavailable,
-            "matched_contracts": matched_count,
-            "no_match_in_table": no_match_count,
-            "contract_diffs": contract_diffs,
-            "field_stats": field_stats,
-            "summary": summary,
-        }
-
-    @staticmethod
-    def _format_wind_summary(
-        target_date: str,
-        all_codes: list[str],
-        matched_count: int,
-        wind_unavailable: list[str],
-        field_stats: dict,
-        contract_diffs: list[dict],
-    ) -> str:
-        """Format Wind API cross-validation summary (plain text)."""
-        lines = []
-        lines.append(f"{'=' * 80}")
-        lines.append(f"  Wind API 交叉验证报告: {target_date}")
-        lines.append(f"{'=' * 80}")
-        lines.append(f"")
-        lines.append(f"  合约总数: {len(all_codes)}")
-        lines.append(f"  匹配合约: {matched_count}")
-        if wind_unavailable:
-            lines.append(f"  Wind 无数据: {len(wind_unavailable)}")
-
-        has_diff = any(s["diff"] > 0 for s in field_stats.values())
-        if not has_diff and not wind_unavailable:
-            lines.append(f"  ✅ 全部字段完全一致")
-            lines.append(f"")
-            lines.append(f"{'=' * 80}")
-            return "\n".join(lines)
-
-        lines.append(f"")
-        lines.append(f"  分字段差异统计:")
-        lines.append(
-            f"  {'字段':<14s} | {'匹配':>6s} | {'差异':>4s} | "
-            f"{'最大偏差':>8s} | {'均值偏差':>8s}"
-        )
-        lines.append(f"  {'-' * 52}")
-        for fname, s in field_stats.items():
-            avg_dev = (
-                s["sum_deviation"] / s["diff"]
-                if s["diff"] > 0 else 0.0
-            )
-            icon = "🔴" if s["diff"] > 0 else "✅"
-            lines.append(
-                f"  {icon} {fname:<12s} | {s['matched']:>6d} | "
-                f"{s['diff']:>4d} | {s['max_deviation']:>7.2f}% | "
-                f"{avg_dev:>7.2f}%"
-            )
-
-        if contract_diffs:
-            lines.append(f"")
-            lines.append(f"  差异明细 (最多 20 条):")
-            for d in contract_diffs[:20]:
-                lines.append(
-                    f"    → {d['code']}.{d['field']}: "
-                    f"ours={d['ours']} wind={d['wind']} "
-                    f"偏差={d['deviation_pct']:.2f}%"
-                )
-            if len(contract_diffs) > 20:
-                lines.append(f"    ... 还有 {len(contract_diffs) - 20} 条")
-
-        if wind_unavailable:
-            lines.append(f"")
-            lines.append(f"  Wind 无数据的合约 ({len(wind_unavailable)}):")
-            for c in wind_unavailable[:15]:
-                lines.append(f"    ⚠️ {c}")
-            if len(wind_unavailable) > 15:
-                lines.append(f"    ... 还有 {len(wind_unavailable) - 15} 个")
-
-        lines.append(f"")
-        lines.append(f"{'=' * 80}")
-        return "\n".join(lines)
 
     def _format_summary(
         self,
