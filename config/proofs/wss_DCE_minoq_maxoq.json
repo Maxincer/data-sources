@@ -1,0 +1,124 @@
+{
+  "date": "20260527",
+  "exchange": "DCE",
+  "type": "minoq_maxoq",
+  "ec": 0,
+  "records": [
+    {
+      "code": "A2605.DCE",
+      "minoq": null,
+      "maxoq": null
+    },
+    {
+      "code": "B2605.DCE",
+      "minoq": null,
+      "maxoq": null
+    },
+    {
+      "code": "BB2605.DCE",
+      "minoq": null,
+      "maxoq": null
+    },
+    {
+      "code": "BZ2605.DCE",
+      "minoq": 4.0,
+      "maxoq": 1000.0
+    },
+    {
+      "code": "C2605.DCE",
+      "minoq": null,
+      "maxoq": null
+    },
+    {
+      "code": "CS2605.DCE",
+      "minoq": null,
+      "maxoq": null
+    },
+    {
+      "code": "EB2605.DCE",
+      "minoq": 8.0,
+      "maxoq": 1000.0
+    },
+    {
+      "code": "EG2605.DCE",
+      "minoq": 8.0,
+      "maxoq": 1000.0
+    },
+    {
+      "code": "FB2605.DCE",
+      "minoq": null,
+      "maxoq": null
+    },
+    {
+      "code": "I2605.DCE",
+      "minoq": null,
+      "maxoq": null
+    },
+    {
+      "code": "J2605.DCE",
+      "minoq": null,
+      "maxoq": null
+    },
+    {
+      "code": "JD2605.DCE",
+      "minoq": null,
+      "maxoq": null
+    },
+    {
+      "code": "JM2605.DCE",
+      "minoq": null,
+      "maxoq": null
+    },
+    {
+      "code": "L2605.DCE",
+      "minoq": 8.0,
+      "maxoq": 1000.0
+    },
+    {
+      "code": "LG2605.DCE",
+      "minoq": null,
+      "maxoq": null
+    },
+    {
+      "code": "LH2605.DCE",
+      "minoq": null,
+      "maxoq": null
+    },
+    {
+      "code": "M2605.DCE",
+      "minoq": null,
+      "maxoq": null
+    },
+    {
+      "code": "P2605.DCE",
+      "minoq": null,
+      "maxoq": null
+    },
+    {
+      "code": "PG2605.DCE",
+      "minoq": 8.0,
+      "maxoq": 1000.0
+    },
+    {
+      "code": "PP2605.DCE",
+      "minoq": 8.0,
+      "maxoq": 1000.0
+    },
+    {
+      "code": "RR2605.DCE",
+      "minoq": null,
+      "maxoq": null
+    },
+    {
+      "code": "V2605.DCE",
+      "minoq": 8.0,
+      "maxoq": 1000.0
+    },
+    {
+      "code": "Y2605.DCE",
+      "minoq": null,
+      "maxoq": null
+    }
+  ],
+  "count": 23
+}

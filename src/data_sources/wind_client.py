@@ -83,7 +83,13 @@ def fetch_wind_data(
 
     codes_str = ",".join(wind_codes)
     fields_str = ",".join(fields)
-    options = f"tradeDate={target_date};futinstrtype=1;code_col=code"
+
+    # code_col=code conflicts with minoq/maxoq indicators (CWSSService: invalid indicators)
+    has_order_fields = any(f in ("minoq", "maxoq") for f in fields)
+    if has_order_fields:
+        options = f"tradeDate={target_date};futinstrtype=1"
+    else:
+        options = f"tradeDate={target_date};futinstrtype=1;code_col=code"
 
     ec, es, df = cpp_py.w.wss(codes_str, fields_str, options)
     if ec != 0 or df is None or df.empty:
@@ -91,8 +97,12 @@ def fetch_wind_data(
 
     # ---- Parse DataFrame → [{code, date, field: float}] ----
     result: list[dict] = []
-    for _, row in df.iterrows():
-        wind_code = row.get("code", "")
+    for i, (_, row) in enumerate(df.iterrows()):
+        # With code_col=code: use row["code"]; without: match by position
+        if has_order_fields:
+            wind_code = wind_codes[i] if i < len(wind_codes) else ""
+        else:
+            wind_code = row.get("code", "")
         if not wind_code:
             continue
         db_code = code_map.get(wind_code, wind_code)

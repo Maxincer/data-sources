@@ -1,0 +1,49 @@
+{
+  "date": "20260527",
+  "exchange": "GFEX",
+  "type": "minoq_maxoq",
+  "ec": 0,
+  "records": [
+    {
+      "code": "SI2605.GFE",
+      "minoq": null,
+      "maxoq": null
+    },
+    {
+      "code": "LC2605.GFE",
+      "minoq": 5.0,
+      "maxoq": 1000.0
+    },
+    {
+      "code": "LC2606.GFE",
+      "minoq": 5.0,
+      "maxoq": 1000.0
+    },
+    {
+      "code": "LC2607.GFE",
+      "minoq": 5.0,
+      "maxoq": 1000.0
+    },
+    {
+      "code": "PS2605.GFE",
+      "minoq": 5.0,
+      "maxoq": 1000.0
+    },
+    {
+      "code": "PS2606.GFE",
+      "minoq": 5.0,
+      "maxoq": 1000.0
+    },
+    {
+      "code": "PT2608.GFE",
+      "minoq": 1.0,
+      "maxoq": 1000.0
+    },
+    {
+      "code": "PD2608.GFE",
+      "minoq": 1.0,
+      "maxoq": 1000.0
+    }
+  ],
+  "count": 8
+}
