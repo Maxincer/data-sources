@@ -515,6 +515,7 @@ class Verifier:
             else:
                 from data_sources.db import get_connection
                 conn = get_connection()
+                conn.cursorclass = pymysql.cursors.DictCursor
                 try:
                     dt = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:8]}"
                     col_list = ", ".join(fields)
