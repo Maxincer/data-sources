@@ -38,7 +38,9 @@ def resolve_config(config_override: dict | None = None) -> dict:
     """Return merged DB config, overriding defaults with provided values."""
     cfg = dict(DB_CONFIG)
     if config_override:
-        cfg.update({k: v for k, v in config_override.items() if v is not None})
+        for k, v in config_override.items():
+            if v is not None and k not in ("table",):
+                cfg[k] = v
     return cfg
 
 

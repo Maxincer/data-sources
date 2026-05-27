@@ -50,11 +50,15 @@ if [ -n "${DEV_MODE}" ]; then
     export DB_USER="root"
     export DB_PASSWORD="root0808"
     export DB_DATABASE="future_cn"
+    # export DB_HOST="192.168.1.27"
+    # export DB_USER="tools"
+    # export DB_PASSWORD="tools0512"
+    # export DB_DATABASE="future_cn"
     PIP="$(dirname "$0")/../.venv/bin/python3"
     export PYTHONPATH="src:libs/mxz-utils/src"
     export LD_LIBRARY_PATH="$HOME/.local/chrome-libs"
     RUN_FETCHER="${PIP} -m data_sources.fetcher run ${TRADE_DATE}"
-    RUN_WRITER="${PIP} -m data_sources.writer --date ${TRADE_DATE}${WRITER_OPTS}"
+    RUN_WRITER="${PIP} -m data_sources.writer --date ${TRADE_DATE} ${WRITER_OPTS}"
     RUN_REPORTER="${PIP} -m data_sources.reporter ${TRADE_DATE}"
 else
     # 生产模式：pip install --user

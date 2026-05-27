@@ -331,7 +331,7 @@ class Reporter:
             f"匹配: {comp.get('matched_count',0)} 条"
         )
         lines.append("")
-        lines.append("| 交易所 | source_a | source_b | 缺漏 | 多余 |")
+        lines.append("| 交易所 | source_a | source_b | 多余 | 缺漏 |")
         lines.append("| :--- | ---: | ---: | ---: | ---: |")
         for ex in sorted(ec.keys()):
             if ex == "CSI":
@@ -349,7 +349,7 @@ class Reporter:
         mc = comp.get("missing_count", len(missing_records))
         ecnt = comp.get("extra_count", len(extra_records))
         if mc:
-            lines.append(f"**缺漏** (source_a有/source_b无, 共{mc}条, 最多10条):")
+            lines.append(f"**多余** (source_a有/source_b无, 共{mc}条, 最多10条):")
             for rec in missing_records[:10]:
                 code = rec.get("code", "?")
                 open_v = rec.get("open", "—")
@@ -358,7 +358,7 @@ class Reporter:
                 lines.append(f"  ❌ code={code}, open={open_v}, close={close_v}, settle={settle_v}")
             lines.append("")
         if ecnt:
-            lines.append(f"**多余** (source_b有/source_a无, 共{ecnt}条, 最多10条):")
+            lines.append(f"**缺漏** (source_b有/source_a无, 共{ecnt}条, 最多10条):")
             for rec in extra_records[:10]:
                 code = rec.get("code", "?")
                 open_v = rec.get("open", "—")
@@ -441,6 +441,7 @@ class Reporter:
 
         return "\n".join(lines)
 
+    @staticmethod
     def _email_file_size_section(date_str: str) -> str:
         """File size section for email, matching Feishu format."""
         metadata_file = Path("./data/raw/.metadata.jsonl")
@@ -531,7 +532,7 @@ class Reporter:
         parts.append(
             '<tr style="background:#f5f5f5;">'
             '<th>交易所</th><th>source_a</th><th>source_b</th>'
-            '<th>缺漏</th><th>多余</th></tr>'
+            '<th>多余</th><th>缺漏</th></tr>'
         )
         for ex in sorted(ec.keys()):
             if ex == "CSI":
@@ -551,7 +552,7 @@ class Reporter:
         missing_records = comp.get("missing_records", [])
         extra_records = comp.get("extra_records", [])
         if missing_count:
-            parts.append(f'<p>⚠️ 缺漏: {missing_count} 条 (source_a有/source_b无)</p>')
+            parts.append(f'<p>➕ 多余: {missing_count} 条 (source_a有/source_b无)</p>')
             parts.append('<ul>')
             for rec in missing_records[:10]:
                 code = rec.get("code", "?")
@@ -561,7 +562,7 @@ class Reporter:
                 parts.append(f'<li>... 还有 {missing_count - 10} 条</li>')
             parts.append('</ul>')
         if extra_count:
-            parts.append(f'<p>➕ 多余: {extra_count} 条 (source_b有/source_a无)</p>')
+            parts.append(f'<p>⚠️ 缺漏: {extra_count} 条 (source_b有/source_a无)</p>')
             parts.append('<ul>')
             for rec in extra_records[:10]:
                 code = rec.get("code", "?")
