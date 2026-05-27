@@ -699,7 +699,9 @@ class Verifier:
                 f"【原表有但新表无】共 {len(missing_records)} 条"
             )
             for rec in missing_records[:15]:
-                lines.append(f"  ❌ {rec['code']} @ {rec['date']}")
+                d = rec.get("date", "")
+                dt = f" @ {d}" if d else ""
+                lines.append(f"  ❌ {rec['code']}{dt}")
             if len(missing_records) > 15:
                 lines.append(f"  ... 还有 {len(missing_records) - 15} 条")
 
@@ -710,7 +712,9 @@ class Verifier:
                 f"【新表有但原表无】共 {len(extra_records)} 条"
             )
             for rec in extra_records[:15]:
-                lines.append(f"  ➕ {rec['code']} @ {rec['date']}")
+                d = rec.get("date", "")
+                dt = f" @ {d}" if d else ""
+                lines.append(f"  ➕ {rec['code']}{dt}")
             if len(extra_records) > 15:
                 lines.append(f"  ... 还有 {len(extra_records) - 15} 条")
 
