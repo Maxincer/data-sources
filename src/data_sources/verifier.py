@@ -693,15 +693,19 @@ class Verifier:
         lines.append("")
         lines.append("【交易所合约数对比】")
         lines.append(
-            f"{'交易所':>8s} | {'目标(原表)':>10s} | {'新表':>10s} | "
+            f"{'交易所':>8s} | {'source_a':>10s} | {'source_b':>10s} | "
             f"{'缺漏':>8s} | {'多余':>8s}"
         )
         lines.append("-" * 56)
         for ex in sorted(exchange_counts.keys()):
             ec = exchange_counts[ex]
+            sa = ec.get("source_a", ec.get("original", 0))
+            sb = ec.get("source_b", ec.get("new", 0))
+            ms = ec.get("missing", ec.get("missing_in_new", 0))
+            ex_c = ec.get("extra", ec.get("extra_in_new", 0))
             lines.append(
-                f"{ex:>8s} | {ec['original']:>10d} | {ec['new']:>10d} | "
-                f"{ec['missing_in_new']:>8d} | {ec['extra_in_new']:>8d}"
+                f"{ex:>8s} | {sa:>10d} | {sb:>10d} | "
+                f"{ms:>8d} | {ex_c:>8d}"
             )
 
         # Missing records sample
