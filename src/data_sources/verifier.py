@@ -495,6 +495,12 @@ class Verifier:
             "if_basis", "long_margin", "short_margin", "minoq", "maxoq",
         ]
 
+        # Per-field decimal precision (default 4)
+        _PRECISION = {
+            "long_margin": 0, "short_margin": 0,
+            "volume": 0, "oi": 0, "minoq": 0, "maxoq": 0,
+        }
+
         # ---- Build lookups {(code, date_str): record} ----
         lookup_a: dict = {}
         for r in data_a:
@@ -597,7 +603,7 @@ class Verifier:
                     continue
                 if av is None and bv is not None:
                     cr.total_missing_original += 1
-                    bvf = round(float(bv), 4) if isinstance(bv, (int, float)) else bv
+                    bvf = round(float(bv), _PRECISION.get(field, 4)) if isinstance(bv, (int, float)) else bv
                     if len(cr.sample_missing_in_original) < 5:
                         cr.sample_missing_in_original.append({
                             "code": code, "date": target_date,
@@ -606,7 +612,7 @@ class Verifier:
                     continue
                 if av is not None and bv is None:
                     cr.total_missing_new += 1
-                    avf = round(float(av), 4) if isinstance(av, (int, float)) else av
+                    avf = round(float(av), _PRECISION.get(field, 4)) if isinstance(av, (int, float)) else av
                     if len(cr.sample_missing_in_new) < 5:
                         cr.sample_missing_in_new.append({
                             "code": code, "date": target_date,

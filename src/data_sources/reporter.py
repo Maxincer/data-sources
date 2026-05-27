@@ -421,19 +421,19 @@ class Reporter:
                     diff = round(sd['original'] - sd['new'], 4) if isinstance(sd.get('original'), (int, float)) and isinstance(sd.get('new'), (int, float)) else "—"
                     lines.append(
                         f"    {sd['code']}:"
-                        f" 原={sd['original']}"
-                        f" 新={sd['new']}"
-                        f" 差={diff}"
+                        f" a={sd['original']}"
+                        f" b={sd['new']}"
+                        f" a-b={diff}"
                     )
                 for sd in missing_b:
                     lines.append(
                         f"    {sd['code']}:"
-                        f" 原={sd['original']} 新=— 差=—"
+                        f" a={sd['original']} b=— a-b=—"
                     )
                 for sd in missing_a:
                     lines.append(
                         f"    {sd['code']}:"
-                        f" 原=— 新={sd['new']} 差=—"
+                        f" a=— b={sd['new']} a-b=—"
                     )
 
         if not has_diff and not mc:
@@ -618,12 +618,12 @@ class Reporter:
                     for sd in samples[:limit]:
                         diff = round(sd['original'] - sd['new'], 4) if isinstance(sd.get('original'), (int, float)) and isinstance(sd.get('new'), (int, float)) else "—"
                         parts.append(
-                            f'<li>{sd["code"]}: 原={sd["original"]} 新={sd["new"]} 差={diff}</li>'
+                            f'<li>{sd["code"]}: a={sd["original"]} b={sd["new"]} a-b={diff}</li>'
                         )
                     for sd in missing_b:
-                        parts.append(f'<li>{sd["code"]}: 原={sd["original"]} 新=—</li>')
+                        parts.append(f'<li>{sd["code"]}: a={sd["original"]} b=—</li>')
                     for sd in missing_a:
-                        parts.append(f'<li>{sd["code"]}: 原=— 新={sd["new"]}</li>')
+                        parts.append(f'<li>{sd["code"]}: a=— b={sd["new"]}</li>')
                     parts.append('</ul>')
 
         return "\n".join(parts)
