@@ -1,8 +1,4 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-MySQL database connection and upsert operations for the data pipeline.
+"""MySQL database connection and upsert operations for the data pipeline.
 
 New table naming: t_futures_info_{source} where source = "exchange" (cffex, shfe, etc.)
 Or a combined table for all exchange-sourced data.
@@ -12,17 +8,15 @@ parameterization (e.g. switching host/database/table for different deployment
 phases without modifying global state).
 """
 
-
 import os
 import pymysql
-
 
 if os.environ.get("DEV_MODE"):
     # 开发环境（server202 / WSL）
     DB_CONFIG = {
         "host": "192.168.1.202",
         "user": "root",
-        "password": "root0808",
+        "password": "***",
         "database": "future_cn",
         "charset": "utf8mb4",
     }
@@ -31,7 +25,7 @@ else:
     DB_CONFIG = {
         "host": "192.168.1.27",
         "user": "tools",
-        "password": "tools0512",
+        "password": "***",
         "database": "future_cn",
         "charset": "utf8mb4",
     }
@@ -61,13 +55,47 @@ def _database_name(config_override: dict | None = None) -> str:
     return cfg.get("database", "future_cn")
 
 
-# ---- Connection ----
-
-
 def get_connection(config_override: dict | None = None):
     """Return a pymysql connection."""
     cfg = resolve_config(config_override)
     return pymysql.connect(**cfg)
+
+
+def fetch_table(table: str, date: str) -> list[dict]:
+    """Read all rows from a MySQL table for a given date.
+
+    Returns list of records: [{"code": "...", "date": "YYYY-MM-DD",
+                                "open": 105720.0, ...}, ...]
+    Dates are converted to YYYYMMDD strings. Numeric fields become floats.
+    """
+    conn = get_connection()
+    conn.cursorclass = pymysql.cursors.DictCursor
+    try:
+        dt = f"{date[:4]}-{date[4:6]}-{date[6:8]}"
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT * FROM `future_cn`.{table} WHERE date = %s",
+                (dt,),
+            )
+            rows = cur.fetchall()
+            result: list[dict] = []
+            for row in rows:
+                rec = {}
+                for k, v in row.items():
+                    if v is None:
+                        continue  # skip nulls, missing keys will be None on access
+                    if hasattr(v, "isoformat"):
+                        # date / datetime → YYYYMMDD
+                        rec[k] = str(v).replace("-", "")[:8]
+                    elif isinstance(v, (int, float)):
+                        rec[k] = float(v)
+                    else:
+                        rec[k] = v
+                if rec.get("code"):  # only include rows with a code
+                    result.append(rec)
+            return result
+    finally:
+        conn.close()
 
 
 # ---- DDL ----
@@ -75,40 +103,37 @@ def get_connection(config_override: dict | None = None):
 
 CREATE_SQL_TPL = """\
 CREATE TABLE IF NOT EXISTS `{database}`.`{table}` (
-  `id` int NOT NULL AUTO_INCREMENT,
-  `code` varchar(128) DEFAULT NULL,
-  `date` date DEFAULT NULL,
-  `open` decimal(20,4) DEFAULT NULL,
-  `high` decimal(20,4) DEFAULT NULL,
-  `low` decimal(20,4) DEFAULT NULL,
-  `close` decimal(20,4) DEFAULT NULL,
-  `volume` decimal(20,4) DEFAULT NULL,
-  `amt` decimal(24,2) DEFAULT NULL,
-  `oi` decimal(20,4) DEFAULT NULL,
-  `settle` decimal(20,4) DEFAULT NULL,
-  `maxup` decimal(20,4) DEFAULT NULL,
-  `maxdown` decimal(20,4) DEFAULT NULL,
-  `if_basis` decimal(20,4) DEFAULT NULL,
-  `long_margin` decimal(20,4) DEFAULT NULL,
-  `short_margin` decimal(20,4) DEFAULT NULL,
-  `minoq` int DEFAULT NULL,
-  `maxoq` int DEFAULT NULL,
-  `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `update_time` timestamp NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `code_date` (`code`, `date`),
-  KEY `code` (`code`),
-  KEY `date` (`date`)
+    `code`    VARCHAR(16)  NOT NULL,
+    `date`    DATE         NOT NULL,
+    `open`    DOUBLE       DEFAULT NULL,
+    `high`    DOUBLE       DEFAULT NULL,
+    `low`     DOUBLE       DEFAULT NULL,
+    `close`   DOUBLE       DEFAULT NULL,
+    `volume`  DOUBLE       DEFAULT NULL,
+    `amt`     DOUBLE       DEFAULT NULL,
+    `oi`      DOUBLE       DEFAULT NULL,
+    `settle`  DOUBLE       DEFAULT NULL,
+    `maxup`   DOUBLE       DEFAULT NULL,
+    `maxdown` DOUBLE       DEFAULT NULL,
+    `if_basis` DOUBLE      DEFAULT NULL,
+    `long_margin` DOUBLE   DEFAULT NULL,
+    `short_margin` DOUBLE  DEFAULT NULL,
+    `minoq`   DOUBLE       DEFAULT NULL,
+    `maxoq`   DOUBLE       DEFAULT NULL,
+    `last_trade_date` DATE DEFAULT NULL,
+    `source`  VARCHAR(16)  DEFAULT NULL,
+    PRIMARY KEY (`code`, `date`),
+    INDEX `idx_date` (`date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """
 
 
-def create_table(config_override: dict | None = None):
-    """Create table if it doesn't exist."""
-    db_name = _database_name(config_override)
-    tbl_name = _table_name(config_override)
-    sql = CREATE_SQL_TPL.format(database=db_name, table=tbl_name)
+def ensure_table_exists(config_override: dict | None = None):
+    """Create target table if it doesn't already exist."""
     conn = get_connection(config_override)
+    table = _table_name(config_override)
+    database = _database_name(config_override)
+    sql = CREATE_SQL_TPL.format(database=database, table=table)
     try:
         with conn.cursor() as cur:
             cur.execute(sql)
@@ -117,72 +142,37 @@ def create_table(config_override: dict | None = None):
         conn.close()
 
 
-# ---- DML ----
-
-
-def upsert_records(records, config_override: dict | None = None):
-    """
-    Upsert parsed records into the configured table.
-
-    Each record should be a dict with keys matching the table columns.
-    """
+def upsert_rows(records: list[dict], config_override: dict | None = None):
+    """INSERT ... ON DUPLICATE KEY UPDATE for a batch of records."""
     if not records:
         return 0
-    cols = [
-        "code", "date", "open", "high", "low", "close",
-        "volume", "amt", "oi", "settle", "maxup", "maxdown",
-        "if_basis", "long_margin", "short_margin", "minoq", "maxoq",
-    ]
-    placeholders = ", ".join([f"%({c})s" for c in cols])
-    column_str = ", ".join(cols)
+
+    conn = get_connection(config_override)
+    table = _table_name(config_override)
+    database = _database_name(config_override)
+
+    col_names = list(records[0].keys())
+    col_str = ", ".join(f"`{c}`" for c in col_names)
+    placeholder_str = ", ".join(["%s"] * len(col_names))
     update_str = ", ".join(
-        [f"{c}=VALUES({c})" for c in cols if c not in ("code", "date")]
+        f"`{c}` = VALUES(`{c}`)" for c in col_names
+        if c not in ("code", "date")
     )
-    db_name = _database_name(config_override)
-    tbl_name = _table_name(config_override)
+
     sql = (
-        f"INSERT INTO `{db_name}`.`{tbl_name}` ({column_str}) "
-        f"VALUES ({placeholders}) "
+        f"INSERT INTO `{database}`.`{table}` ({col_str}) "
+        f"VALUES ({placeholder_str}) "
         f"ON DUPLICATE KEY UPDATE {update_str}"
     )
-    from data_sources.modifier import margin_to_pct
 
-    conn = get_connection(config_override)
     try:
         with conn.cursor() as cur:
+            affected = 0
             for rec in records:
-                rec = dict(rec)
-                # Convert margin to percentage (0.12 -> 12.0)
-                if "long_margin" in rec:
-                    rec["long_margin"] = margin_to_pct(rec["long_margin"])
-                if "short_margin" in rec:
-                    rec["short_margin"] = margin_to_pct(rec["short_margin"])
-                # Ensure date is in YYYY-MM-DD format
-                d = rec.get("date", "")
-                if d and isinstance(d, str) and len(d) == 8:
-                    rec["date"] = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
-                # Filter to only known columns
-                clean = {k: rec.get(k) for k in cols}
-                cur.execute(sql, clean)
+                values = [rec.get(c) for c in col_names]
+                cur.execute(sql, values)
+                affected += cur.rowcount
         conn.commit()
-        return len(records)
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-
-def count_records(config_override: dict | None = None):
-    """Return total record count in the configured table."""
-    db_name = _database_name(config_override)
-    tbl_name = _table_name(config_override)
-    conn = get_connection(config_override)
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT COUNT(*) AS cnt FROM `{db_name}`.`{tbl_name}`"
-            )
-            return cur.fetchone()["cnt"]
+        return affected
     finally:
         conn.close()

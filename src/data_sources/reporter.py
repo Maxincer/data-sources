@@ -89,13 +89,16 @@ class Reporter:
 
         Args:
             date_str: 交易日 YYYYMMDD
-            skip_table_compare: True=阶段二，跳过两表对比，仅做 Wind API 交叉验证
+            skip_table_compare: True=阶段二，跳过两表对比，仅做 WSS 交叉验证
             email: 是否同时发送邮件
 
         一次计算，两个渠道：
           1. 飞书（默认）
           2. 邮件（email=True 时同时发送）
         """
+        from data_sources.db import fetch_table
+        from data_sources.wind_client import fetch_wind_data
+
         v = Verifier(self.logger)
         stats = v.get_field_stats(date_str)
         abnormal = v.get_abnormal_nulls(date_str)
@@ -108,34 +111,35 @@ class Reporter:
         ec = {}
         fd = {}
         comp = {}
+        wind_comp = {}
+
+        # Fetch our data once
+        ours = fetch_table("t_futures_info_exchange", date_str)
 
         if not skip_table_compare:
-            # Phase 1a: 两表对比（exchange vs Wind t_futures_info）
-            comp = v.compare_all(
-                target_date=date_str,
-                source_a="t_futures_info_exchange",
-                source_b="t_futures_info",
-            )
+            # Phase 1a: 两表对比
+            wind_tbl = fetch_table("t_futures_info", date_str)
+            comp = v.compare_all(date_str, ours, wind_tbl)
             ec = comp.get("exchange_counts", {})
             fd = comp.get("field_diffs", {})
             feishu_sections.append(
-                self._build_comparison_section(comp, date_str)
+                self._build_comparison_section(
+                    "cross-validation: t_futures_info_exchange vs t_futures_info",
+                    comp, date_str,
+                )
             )
 
         # Phase 1b / Phase 2: Wind WSS 交叉验证
-        from data_sources.wind_client import fetch_wind_data
         wind_data = fetch_wind_data(date_str)
-        wind_available = len(wind_data) > 0
-
-        if wind_available:
-            our_table = "t_futures_info" if skip_table_compare else "t_futures_info_exchange"
-            wind_comp = v.compare_all(
-                target_date=date_str,
-                source_a=our_table,
-                source_b=wind_data,
+        if wind_data:
+            wind_comp = v.compare_all(date_str, ours, wind_data)
+            title = (
+                "cross-validation: t_futures_info vs wss"
+                if skip_table_compare
+                else "cross-validation: t_futures_info_exchange vs wss"
             )
             feishu_sections.append(
-                self._build_wind_comparison_section(wind_comp)
+                self._build_comparison_section(title, wind_comp, date_str)
             )
 
         self._send_feishu_markdown(
@@ -190,9 +194,7 @@ class Reporter:
         html_parts.append(self._email_field_stats(stats, abnormal))
         # Always: Wind cross-validation
         if wind_comp:
-            html_parts.append(
-                self._email_wind_section(wind_comp)
-            )
+            html_parts.append(self._email_field_diffs(wind_comp))
         html_parts.append(self._email_footer())
 
         msg = MIMEMultipart("alternative")
@@ -321,193 +323,113 @@ class Reporter:
         return "\n".join(lines)
 
     @staticmethod
-    def _build_comparison_section(comp: dict, date_str: str) -> str:
-        """Section 3: table comparison differences."""
-        lines = [
-            "**合约覆盖率: t_futures_info vs t_futures_info_exchange "
-            "(个合约)**",
-            "",
-        ]
-        try:
-            ec = comp.get("exchange_counts", {})
-            lines.append("| 交易所 | 原表 | 新表 | 缺漏 | 多余 |")
-            lines.append("| :--- | ---: | ---: | ---: | ---: |")
-            for ex in sorted(ec.keys()):
-                if ex == "CSI":
-                    continue
-                lines.append(
-                    f"| {ex} | {ec[ex]['original']} | {ec[ex]['new']} | "
-                    f"{ec[ex]['missing_in_new']} | {ec[ex]['extra_in_new']} |"
-                )
-
-            original_table = "t_futures_info"
-            new_table = "t_futures_info_exchange"
-            missing_records = comp.get("missing_records", [])
-            extra_records = comp.get("extra_records", [])
-            if missing_records:
-                lines.append("")
-                lines.append("缺漏明细 (原表有/新表无, 最多10条):")
-                for rec in _fetch_records_details(
-                    missing_records[:10], original_table, date_str
-                ):
-                    lines.append(f"  ❌ {_fmt_rec_line(rec)}")
-            if extra_records:
-                lines.append("")
-                lines.append("多余明细 (新表有/原表无, 最多10条):")
-                for rec in _fetch_records_details(
-                    extra_records[:10], new_table, date_str
-                ):
-                    lines.append(f"  ➕ {_fmt_rec_line(rec)}")
-            lines.append("")
-
-            lines.append("**字段差异明细**:")
-            lines.append("")
-
-            has_diff = False
-            fd = comp.get("field_diffs", {})
-            for ex in sorted(fd.keys()):
-                if ex == "CSI":
-                    continue
-                ex_diffs = fd[ex]
-                has_any = any(
-                    s["diff"] > 0
-                    or s["missing_in_original"] > 0
-                    or s["missing_in_new"] > 0
-                    for s in ex_diffs.values()
-                )
-                if not has_any:
-                    continue
-                has_diff = True
-                for field in _FULL_FIELDS:
-                    s = ex_diffs.get(field, {})
-                    if (
-                        s["diff"] == 0
-                        and s["missing_in_original"] == 0
-                        and s["missing_in_new"] == 0
-                    ):
-                        continue
-                    lines.append(f"  **{ex} {field}**:")
-                    limit = None if s["diff"] < 10 else 10
-                    for sd in s["sample_diffs"][:limit]:
-                        diff = round(sd['original'] - sd['new'], 4)
-                        lines.append(
-                            f"    {sd['code']}:"
-                            f" 原={sd['original']}"
-                            f" 新={sd['new']}"
-                            f" 差={diff}"
-                        )
-                    for sd in s.get("sample_missing_in_new", []):
-                        lines.append(
-                            f"    {sd['code']}:"
-                            f" 原={sd['original']} 新=— 差=—"
-                        )
-                    for sd in s.get("sample_missing_in_original", []):
-                        lines.append(
-                            f"    {sd['code']}:"
-                            f" 原=— 新={sd['new']} 差=—"
-                        )
-
-            if not has_diff:
-                lines.append("✅ 字段无差异")
-        except Exception as e:
-            lines.append(f"**对比失败**: {e}")
-
-        return "\n".join(lines)
-
     @staticmethod
-    def _build_wind_comparison_section(wind_comp: dict) -> str:
-        """Wind WSS cross-validation section for Feishu."""
-        if not wind_comp or not wind_comp.get("exchange_counts"):
-            return "⚠️ Wind API 不可用，跳过交叉验证"
+    def _build_comparison_section(title: str, comp: dict, date_str: str) -> str:
+        """Unified comparison report section.
 
-        lines = []
-        # Total counts
-        ec = wind_comp["exchange_counts"]
-        total_ours = sum(v.get("original", 0) for v in ec.values())
-        total_wind = sum(v.get("new", 0) for v in ec.values())
-        lines.append(
-            f"**Wind WSS 交叉验证** "
-            f"(ours={total_ours}, wind={total_wind})"
-        )
+        Structure:
+          ## {title}
+          ### contracts count
+          | 交易所 | source_a | source_b | 缺漏 | 多余 |
+            ❌ code=xxx, open=xxx, ...
+          ### groupby ex, field
+            **SHF open**
+              CU2606.SHF 原=xxx 新=xxx 差=xxx
+        """
+        lines = [f"## {title}", ""]
+
+        ec = comp.get("exchange_counts", {})
+
+        # ---- contracts count ----
+        lines.append("### contracts count")
         lines.append("")
-
-        # Missing / extra
-        missing = wind_comp.get("missing_records", [])
-        extra = wind_comp.get("extra_records", [])
-        if missing:
-            lines.append(f"**Wind 无数据** ({len(missing)} 个):")
-            for m in missing[:10]:
-                lines.append(f"  ⚠️ {m.get('code', m)}")
-            if len(missing) > 10:
-                lines.append(f"  ... 还有 {len(missing) - 10} 个")
-            lines.append("")
-        if extra:
-            lines.append(f"**仅 Wind 有** ({len(extra)} 个):")
-            for e in extra[:5]:
-                lines.append(f"  ➕ {e.get('code', e)}")
-            lines.append("")
-
-        # Field diffs (merged across exchanges)
-        field_diffs = wind_comp.get("field_diffs", {})
-        if not field_diffs:
-            if not missing:
-                lines.append("✅ 全部字段完全一致")
-            return "\n".join(lines)
-
-        # Merge field stats across exchanges
-        merged = {}
-        for ex, ex_diffs in field_diffs.items():
-            for fname, s in ex_diffs.items():
-                if fname not in merged:
-                    merged[fname] = {"matched": 0, "diff": 0, "max_deviation_pct": 0, "samples": []}
-                merged[fname]["matched"] += s.get("matched", 0)
-                merged[fname]["diff"] += s.get("diff", 0)
-                merged[fname]["max_deviation_pct"] = max(
-                    merged[fname]["max_deviation_pct"],
-                    s.get("max_deviation_pct", 0),
-                )
-                for sd in s.get("sample_diffs", [])[:3]:
-                    merged[fname]["samples"].append(sd)
-
-        has_diff = any(s["diff"] > 0 for s in merged.values())
-        if not has_diff and not missing:
-            lines.append("✅ 全部字段完全一致")
-            return "\n".join(lines)
-
-        lines.append("**分字段差异统计**:")
-        lines.append("")
-        lines.append("| 字段 | 匹配 | 差异 | 最大偏差 |")
-        lines.append("| :--- | ---: | ---: | ---: |")
-        for fname, s in sorted(merged.items()):
-            icon = "🔴" if s["diff"] > 0 else "✅"
+        lines.append("| 交易所 | source_a | source_b | 缺漏 | 多余 |")
+        lines.append("| :--- | ---: | ---: | ---: | ---: |")
+        for ex in sorted(ec.keys()):
+            if ex == "CSI":
+                continue
+            d = ec[ex]
             lines.append(
-                f"| {icon} {fname} | {s['matched']} | {s['diff']} |"
-                f" {s['max_deviation_pct']:.2f}% |"
+                f"| {ex} | {d['source_a']} | {d['source_b']} | "
+                f"{d['missing']} | {d['extra']} |"
             )
+        lines.append("")
 
-        # Sample diffs (all fields, limited)
-        all_samples = []
-        for fname, s in merged.items():
-            for sd in s.get("samples", []):
-                all_samples.append({**sd, "field": fname})
-        all_samples.sort(key=lambda x: x.get("deviation_pct", 0), reverse=True)
-        if all_samples:
+        # Missing / extra records
+        missing_records = comp.get("missing_records", [])
+        extra_records = comp.get("extra_records", [])
+        if missing_records:
+            lines.append(f"**缺漏** (source_a有/source_b无, 共{len(missing_records)}条, 最多10条):")
+            for rec in missing_records[:10]:
+                code = rec.get("code", "?")
+                open_v = rec.get("open", "—")
+                close_v = rec.get("close", "—")
+                settle_v = rec.get("settle", "—")
+                lines.append(f"  ❌ code={code}, open={open_v}, close={close_v}, settle={settle_v}")
             lines.append("")
-            lines.append("**差异明细** (最多 15 条):")
-            for d in all_samples[:15]:
-                lines.append(
-                    f"  → {d.get('code','?')}.{d.get('field','?')}: "
-                    f"ours={d.get('original','?')} wind={d.get('new','?')}"
-                    f" 偏差 {d.get('deviation_pct',0):.2f}%"
-                )
-            if len(all_samples) > 15:
-                lines.append(f"  ... 还有 {len(all_samples) - 15} 条")
+        if extra_records:
+            lines.append(f"**多余** (source_b有/source_a无, 共{len(extra_records)}条, 最多10条):")
+            for rec in extra_records[:10]:
+                code = rec.get("code", "?")
+                open_v = rec.get("open", "—")
+                close_v = rec.get("close", "—")
+                settle_v = rec.get("settle", "—")
+                lines.append(f"  ➕ code={code}, open={open_v}, close={close_v}, settle={settle_v}")
+            lines.append("")
 
+        # ---- groupby ex, field ----
+        lines.append("### groupby ex, field")
+        lines.append("")
+
+        fd = comp.get("field_diffs", {})
+        has_diff = False
+        for ex in sorted(fd.keys()):
+            if ex == "CSI":
+                continue
+            ex_diffs = fd[ex]
+            has_any = any(
+                s["diff"] > 0
+                or s["missing_in_original"] > 0
+                or s["missing_in_new"] > 0
+                for s in ex_diffs.values()
+            )
+            if not has_any:
+                continue
+            has_diff = True
+            for field in _FULL_FIELDS:
+                s = ex_diffs.get(field, {})
+                if (
+                    s["diff"] == 0
+                    and s["missing_in_original"] == 0
+                    and s["missing_in_new"] == 0
+                ):
+                    continue
+                lines.append(f"  **{ex} {field}**")
+                limit = None if s["diff"] < 10 else 10
+                for sd in s["sample_diffs"][:limit]:
+                    diff = round(sd['original'] - sd['new'], 4) if isinstance(sd.get('original'), (int, float)) and isinstance(sd.get('new'), (int, float)) else "—"
+                    lines.append(
+                        f"    {sd['code']}:"
+                        f" 原={sd['original']}"
+                        f" 新={sd['new']}"
+                        f" 差={diff}"
+                    )
+                for sd in s.get("sample_missing_in_new", []):
+                    lines.append(
+                        f"    {sd['code']}:"
+                        f" 原={sd['original']} 新=— 差=—"
+                    )
+                for sd in s.get("sample_missing_in_original", []):
+                    lines.append(
+                        f"    {sd['code']}:"
+                        f" 原=— 新={sd['new']} 差=—"
+                    )
+
+        if not has_diff and not missing_records:
+            lines.append("✅ 全部字段完全一致")
+        
         return "\n".join(lines)
 
-        return "\n".join(lines)
-
-    @staticmethod
     def _email_file_size_section(date_str: str) -> str:
         """File size section for email, matching Feishu format."""
         metadata_file = Path("./data/raw/.metadata.jsonl")
@@ -580,22 +502,22 @@ class Reporter:
         )
         parts.append(
             '<tr style="background:#f5f5f5;">'
-            '<th>交易所</th><th>原表</th><th>新表</th>'
+            '<th>交易所</th><th>source_a</th><th>source_b</th>'
             '<th>缺漏</th><th>多余</th></tr>'
         )
         for ex in sorted(ec.keys()):
             if ex == "CSI":
                 continue
             c = ec[ex]
-            color = "red" if c["missing_in_new"] > 0 else "green"
+            color = "red" if c["missing"] > 0 else "green"
             parts.append(
                 f'<tr><td><b>{ex}</b></td>'
-                f'<td style="text-align:center">{c["original"]}</td>'
-                f'<td style="text-align:center">{c["new"]}</td>'
+                f'<td style="text-align:center">{c["source_a"]}</td>'
+                f'<td style="text-align:center">{c["source_b"]}</td>'
                 f'<td style="text-align:center;color:{color}">'
-                f'{c["missing_in_new"]}</td>'
+                f'{c["missing"]}</td>'
                 f'<td style="text-align:center">'
-                f'{c["extra_in_new"]}</td></tr>'
+                f'{c["extra"]}</td></tr>'
             )
         parts.append('</table>')
 
@@ -764,69 +686,6 @@ class Reporter:
         return "\n".join(parts)
 
     @staticmethod
-    def _email_wind_section(wind_comp: dict) -> str:
-        """Wind WSS 交叉验证邮件章节 (HTML)."""
-        parts = ['<h2>🌐 Wind WSS 交叉验证</h2>']
-        if not wind_comp or not wind_comp.get("exchange_counts"):
-            parts.append('<p>⚠️ Wind WSS 不可用</p>')
-            return "\n".join(parts)
-
-        ec = wind_comp["exchange_counts"]
-        total_ours = sum(v.get("original", 0) for v in ec.values())
-        total_wind = sum(v.get("new", 0) for v in ec.values())
-        parts.append(f'<p>ours={total_ours}, wind={total_wind}</p>')
-
-        missing = wind_comp.get("missing_records", [])
-        if missing:
-            parts.append(f'<p>Wind 无数据 ({len(missing)} 个)</p>')
-
-        field_diffs = wind_comp.get("field_diffs", {})
-        if not field_diffs:
-            if not missing:
-                parts.append('<p>✅ 全部字段完全一致</p>')
-            return "\n".join(parts)
-
-        # Merge field stats
-        merged = {}
-        for ex, ex_diffs in field_diffs.items():
-            for fname, s in ex_diffs.items():
-                if fname not in merged:
-                    merged[fname] = {"matched": 0, "diff": 0, "max_deviation_pct": 0}
-                merged[fname]["matched"] += s.get("matched", 0)
-                merged[fname]["diff"] += s.get("diff", 0)
-                merged[fname]["max_deviation_pct"] = max(
-                    merged[fname]["max_deviation_pct"],
-                    s.get("max_deviation_pct", 0),
-                )
-
-        has_diff = any(s["diff"] > 0 for s in merged.values())
-        if not has_diff and not missing:
-            parts.append('<p>✅ 全部字段完全一致</p>')
-            return "\n".join(parts)
-
-        parts.append('<h3>分字段差异统计</h3>')
-        parts.append(
-            '<table border="1" cellpadding="6" cellspacing="0"'
-            ' style="border-collapse:collapse;">'
-        )
-        parts.append(
-            '<tr style="background:#f5f5f5;">'
-            '<th>字段</th><th>匹配</th><th>差异</th>'
-            '<th>最大偏差</th></tr>'
-        )
-        for fname, s in sorted(merged.items()):
-            icon = "🔴" if s["diff"] > 0 else "✅"
-            parts.append(
-                f'<tr><td>{icon} {fname}</td>'
-                f'<td style="text-align:right">{s["matched"]}</td>'
-                f'<td style="text-align:right">{s["diff"]}</td>'
-                f'<td style="text-align:right">{s["max_deviation_pct"]:.2f}%</td></tr>'
-            )
-        parts.append('</table>')
-
-        return "\n".join(parts)
-
-    @staticmethod
     def _email_footer() -> str:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return (
@@ -836,50 +695,7 @@ class Reporter:
         )
 
 
-def _fetch_records_details(records: list, table: str,
-                           date_str: str) -> list:
-    """查询记录的所有字段值。"""
-    cfg = DB_CONFIG if table == "t_futures_info_exchange" else DB_CONFIG_ORIG
-    conn = pymysql.connect(**cfg, cursorclass=DictCursor)
-    try:
-        with conn.cursor() as cur:
-            dt = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
-            cols = ", ".join(["code"] + _FULL_FIELDS)
-            results = []
-            for rec in records:
-                code = rec["code"]
-                cur.execute(
-                    f"SELECT {cols} FROM future_cn.{table} "
-                    f"WHERE code = %s AND date = %s",
-                    (code, dt),
-                )
-                row = cur.fetchone()
-                if row:
-                    results.append(dict(row))
-            return results
-    finally:
-        conn.close()
 
-
-def _fmt_rec_line(rec: dict) -> str:
-    """格式化一条记录的所有字段为一行（用于飞书 Markdown）。"""
-    def v(f):
-        val = rec.get(f)
-        if val is None:
-            return "—"
-        try:
-            fv = float(val)
-            if f == "amt":
-                return f"{fv:,.0f}"
-            if f in ("volume", "oi"):
-                return f"{int(fv)}"
-            return f"{fv:g}"
-        except Exception:
-            return str(val)
-    parts = [rec.get("code", "?")]
-    for f in _FULL_FIELDS:
-        parts.append(f"{f}={v(f)}")
-    return " | ".join(parts)
 
 
 def _td(val) -> str:

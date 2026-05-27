@@ -89,15 +89,14 @@ def fetch_wind_data(
     if ec != 0 or df is None or df.empty:
         return {}
 
-    # ---- Parse DataFrame → {db_code: {field: float}} ----
-    result: dict[str, dict[str, float]] = {}
+    # ---- Parse DataFrame → [{code, date, field: float}] ----
+    result: list[dict] = []
     for _, row in df.iterrows():
         wind_code = row.get("code", "")
         if not wind_code:
             continue
         db_code = code_map.get(wind_code, wind_code)
-
-        values: dict[str, float] = {}
+        rec = {"code": db_code, "date": target_date}
         for f in fields:
             val = row.get(f)
             try:
@@ -106,9 +105,7 @@ def fetch_wind_data(
                 continue
             if v != v:  # NaN check
                 continue
-            values[f] = v
-
-        if values:
-            result[db_code] = values
+            rec[f] = v
+        result.append(rec)
 
     return result

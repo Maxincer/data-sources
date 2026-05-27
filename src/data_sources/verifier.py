@@ -477,14 +477,13 @@ class Verifier:
     def compare_all(
         self,
         target_date: str,
-        source_a,
-        source_b,
+        data_a: list[dict],
+        data_b: list[dict],
     ) -> dict:
-        """Compare two data sources field-by-field for a given date.
+        """Compare two record lists field-by-field for a given date.
 
-        Each source can be:
-          - str: MySQL table name in future_cn database
-          - dict: in-memory data {code: {field: value}}
+        Each data source is a list of records:
+          {"code": "CU2606.SHF", "date": "20260526", "open": 105720.0, ...}
 
         Returns:
             dict with keys: exchange_counts, field_diffs, missing_records,
@@ -496,108 +495,91 @@ class Verifier:
             "if_basis", "long_margin", "short_margin", "minoq", "maxoq",
         ]
 
-        # ---- Normalize sources -> {(code, date_str): {field: float}} ----
-        def _load_source(source):
-            if isinstance(source, dict):
-                result = {}
-                for code, row in source.items():
-                    r = {}
-                    for f in fields:
-                        v = row.get(f)
-                        if v is not None:
-                            try:
-                                r[f] = float(v)
-                            except (TypeError, ValueError):
-                                pass
-                    if r:
-                        result[(code, target_date)] = r
-                return result
-            else:
-                from data_sources.db import get_connection
-                conn = get_connection()
-                conn.cursorclass = pymysql.cursors.DictCursor
-                try:
-                    dt = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:8]}"
-                    col_list = ", ".join(fields)
-                    with conn.cursor() as cur:
-                        cur.execute(f"""
-                            SELECT code, date, {col_list}
-                            FROM `future_cn`.{source}
-                            WHERE date = %s
-                        """, (dt,))
-                        result = {}
-                        for row in cur.fetchall():
-                            r = {}
-                            for f in fields:
-                                v = row.get(f)
-                                if v is not None:
-                                    try:
-                                        r[f] = float(v)
-                                    except (TypeError, ValueError):
-                                        pass
-                            if r:
-                                d = str(row["date"]).replace("-", "")
-                                d = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
-                                result[(row["code"], d)] = r
-                        return result
-                finally:
-                    conn.close()
+        # ---- Build lookups {(code, date_str): record} ----
+        lookup_a: dict = {}
+        for r in data_a:
+            code = r.get("code", "")
+            if not code:
+                continue
+            date_str = r.get("date", target_date)
+            if isinstance(date_str, str) and len(date_str) == 8:
+                pass  # already YYYYMMDD
+            lookup_a[(code, date_str)] = r
 
-        data_a = _load_source(source_a)
-        data_b = _load_source(source_b)
+        lookup_b: dict = {}
+        for r in data_b:
+            code = r.get("code", "")
+            if not code:
+                continue
+            date_str = r.get("date", target_date)
+            lookup_b[(code, date_str)] = r
 
-        # ---- (A) Matching / missing / extra ----
-        codes_a = {k[0] for k in data_a}
-        codes_b = {k[0] for k in data_b}
+        # ---- Matching / missing / extra ----
+        codes_a = {k[0] for k in lookup_a}
+        codes_b = {k[0] for k in lookup_b}
+        matched = codes_a & codes_b
         missing = codes_a - codes_b
         extra = codes_b - codes_a
 
-        missing_records = [{"code": c} for c in sorted(missing)]
-        extra_records = [{"code": c} for c in sorted(extra)]
-
         exchange_counts = {}
-        for c in missing:
-            ex = c.rsplit(".", 1)[-1] if "." in c else "?"
-            exchange_counts.setdefault(ex, {
-                "original": 0, "new": 0,
-                "missing_in_new": 0, "extra_in_new": 0,
-            })["missing_in_new"] += 1
-        for c in extra:
-            ex = c.rsplit(".", 1)[-1] if "." in c else "?"
-            exchange_counts.setdefault(ex, {
-                "original": 0, "new": 0,
-                "missing_in_new": 0, "extra_in_new": 0,
-            })["extra_in_new"] += 1
         for c in codes_a:
             ex = c.rsplit(".", 1)[-1] if "." in c else "?"
             exchange_counts.setdefault(ex, {
-                "original": 0, "new": 0,
-                "missing_in_new": 0, "extra_in_new": 0,
-            })["original"] = exchange_counts[ex]["original"] + 1
+                "source_a": 0, "source_b": 0, "missing": 0, "extra": 0,
+            })["source_a"] += 1
         for c in codes_b:
             ex = c.rsplit(".", 1)[-1] if "." in c else "?"
             exchange_counts.setdefault(ex, {
-                "original": 0, "new": 0,
-                "missing_in_new": 0, "extra_in_new": 0,
-            })["new"] = exchange_counts[ex]["new"] + 1
+                "source_a": 0, "source_b": 0, "missing": 0, "extra": 0,
+            })["source_b"] += 1
+        for c in missing:
+            ex = c.rsplit(".", 1)[-1] if "." in c else "?"
+            exchange_counts.setdefault(ex, {
+                "source_a": 0, "source_b": 0, "missing": 0, "extra": 0,
+            })["missing"] += 1
+        for c in extra:
+            ex = c.rsplit(".", 1)[-1] if "." in c else "?"
+            exchange_counts.setdefault(ex, {
+                "source_a": 0, "source_b": 0, "missing": 0, "extra": 0,
+            })["extra"] += 1
 
-        # ---- (B) Field-level comparison ----
+        # Missing/extra records with full data from source
+        missing_records = []
+        for c in sorted(missing):
+            rec = lookup_a.get((c, target_date))
+            if rec is None:
+                # try any date for this code
+                for k in lookup_a:
+                    if k[0] == c:
+                        rec = lookup_a[k]
+                        break
+            missing_records.append(rec if rec else {"code": c})
+
+        extra_records = []
+        for c in sorted(extra):
+            rec = lookup_b.get((c, target_date))
+            if rec is None:
+                for k in lookup_b:
+                    if k[0] == c:
+                        rec = lookup_b[k]
+                        break
+            extra_records.append(rec if rec else {"code": c})
+
+        # ---- Field-level comparison on matched codes ----
         field_results = {}
-        matched = codes_a & codes_b
 
         for code in sorted(matched):
-            a_row = data_a.get((code, target_date), {})
-            # Try different date format
-            if not a_row:
-                for k in data_a:
+            a_row = lookup_a.get((code, target_date))
+            if a_row is None:
+                for k in lookup_a:
                     if k[0] == code:
-                        a_row = data_a[k]
+                        a_row = lookup_a[k]
                         break
-            b_row = data_b.get((code, target_date), {})
-            if not b_row:
-                for k in data_b:
+            b_row = lookup_b.get((code, target_date))
+            if b_row is None:
+                for k in lookup_b:
                     if k[0] == code:
-                        b_row = data_b[k]
+                        b_row = lookup_b[k]
                         break
             if not a_row or not b_row:
                 continue
@@ -615,33 +597,42 @@ class Verifier:
                     continue
                 if av is None and bv is not None:
                     cr.total_missing_original += 1
+                    bvf = round(float(bv), 4) if isinstance(bv, (int, float)) else bv
                     if len(cr.sample_missing_in_original) < 5:
                         cr.sample_missing_in_original.append({
                             "code": code, "date": target_date,
-                            "original": None, "new": round(bv, 4),
+                            "original": None, "new": bvf,
                         })
                     continue
                 if av is not None and bv is None:
                     cr.total_missing_new += 1
+                    avf = round(float(av), 4) if isinstance(av, (int, float)) else av
                     if len(cr.sample_missing_in_new) < 5:
                         cr.sample_missing_in_new.append({
                             "code": code, "date": target_date,
-                            "original": round(av, 4), "new": None,
+                            "original": avf, "new": None,
                         })
                     continue
 
-                av = round(av, 4)
-                bv = round(bv, 4)
+                try:
+                    avf = round(float(av), 4)
+                    bvf = round(float(bv), 4)
+                except (TypeError, ValueError):
+                    avf = av
+                    bvf = bv
 
-                if av != bv:
+                if avf != bvf:
                     cr.total_diff += 1
-                    max_abs = max(abs(av), abs(bv))
-                    deviation = abs(av - bv) / max_abs * 100 if max_abs > 0 else 0.0
+                    if isinstance(avf, (int, float)) and isinstance(bvf, (int, float)):
+                        max_abs = max(abs(avf), abs(bvf))
+                        deviation = abs(avf - bvf) / max_abs * 100 if max_abs > 0 else 0.0
+                    else:
+                        deviation = 0.0
                     cr.max_deviation = max(cr.max_deviation, deviation)
                     if len(cr.sample_diffs) < 10:
                         cr.sample_diffs.append({
                             "code": code, "date": target_date,
-                            "original": av, "new": bv,
+                            "original": avf, "new": bvf,
                             "deviation_pct": round(deviation, 4),
                         })
                 else:
