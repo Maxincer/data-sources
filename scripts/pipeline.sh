@@ -33,18 +33,23 @@ if [ "$CURRENT_HM" -lt 1645 ]; then
     exit 0
 fi
 
-# ---- 目标库参数（可通过环境变量覆盖） ----
-# 阶段二需设：WRITER_TABLE=t_futures_info  SKIP_TABLE_COMPARE=1
-WRITER_TABLE="${WRITER_TABLE:-}"
-WRITER_OPTS=""
-[ -n "$WRITER_TABLE" ] && WRITER_OPTS="$WRITER_OPTS --table $WRITER_TABLE"
+# ---- 阶段配置（阶段一切换阶段二时修改此处）----
+WRITER_TABLE="t_futures_info_exchange"
+# WRITER_TABLE="t_futures_info"  # 阶段二
+WRITER_OPTS="--table $WRITER_TABLE"
 
+# 阶段二需设 SKIP_TABLE_COMPARE=1
+# SKIP_TABLE_COMPARE=1
 REPORTER_OPTS=""
 [ -n "${SKIP_TABLE_COMPARE:-}" ] && REPORTER_OPTS="--skip-table-compare"
 
 # ---- 环境自适应 ----
 if [ -n "${DEV_MODE}" ]; then
-    # 开发模式：强制使用本地源码（即使已安装）
+    # 开发模式
+    export DB_HOST="192.168.1.202"
+    export DB_USER="root"
+    export DB_PASSWORD="root0808"
+    export DB_DATABASE="future_cn"
     PIP="$(dirname "$0")/../.venv/bin/python3"
     export PYTHONPATH="src:libs/mxz-utils/src"
     export LD_LIBRARY_PATH="$HOME/.local/chrome-libs"
@@ -52,7 +57,11 @@ if [ -n "${DEV_MODE}" ]; then
     RUN_WRITER="${PIP} -m data_sources.writer --date ${TRADE_DATE}${WRITER_OPTS}"
     RUN_REPORTER="${PIP} -m data_sources.reporter ${TRADE_DATE}"
 else
-    # 生产模式：pip install --user，命令在 ~/.local/bin
+    # 生产模式：pip install --user
+    export DB_HOST="192.168.1.27"
+    export DB_USER="tools"
+    export DB_PASSWORD="tools0512"
+    export DB_DATABASE="future_cn"
     RUN_FETCHER="fetcher run ${TRADE_DATE}"
     RUN_WRITER="writer --date ${TRADE_DATE}${WRITER_OPTS}"
     RUN_REPORTER="reporter ${TRADE_DATE}"

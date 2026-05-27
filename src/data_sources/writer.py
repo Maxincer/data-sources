@@ -13,7 +13,7 @@ from data_sources.modifier import (should_filter_contract,
     fill_cffex_margin_from_history, fill_if_basis,
     inject_order_limits)
 from data_sources.trade_date import prev_trading_date
-from data_sources.db import create_table, upsert_records
+from data_sources.db import upsert_rows
 from mxz_utils.logging_config import get_logger
 
 
@@ -142,8 +142,7 @@ def write_trade_date(date_str: str, dry_run: bool = False,
     logger.info("目标日期记录数: %s", len(target_records))
     if dry_run:
         return len(target_records), [s.stats_summary for s in stats_list]
-    create_table(config_override)
-    written = upsert_records(target_records, config_override)
+    written = upsert_rows(target_records, config_override)
     logger.info("写入完成: %s 条", written)
     return written, [s.stats_summary for s in stats_list]
 
@@ -182,8 +181,7 @@ def write_all(dry_run: bool = False,
     logger.info("写入总记录数: %s", len(records))
     if dry_run:
         return len(records), [s.stats_summary for s in stats_list]
-    create_table(config_override)
-    written = upsert_records(records, config_override)
+    written = upsert_rows(records, config_override)
     logger.info("写入完成: %s 条", written)
     return written, [s.stats_summary for s in stats_list]
 

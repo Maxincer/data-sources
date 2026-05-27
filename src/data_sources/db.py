@@ -11,26 +11,24 @@ phases without modifying global state).
 import os
 import pymysql
 
-if os.environ.get("DEV_MODE"):
-    # 开发环境（server202 / WSL）
-    DB_CONFIG = {
-        "host": "192.168.1.202",
-        "user": "root",
-        "password": "***",
-        "database": "future_cn",
-        "charset": "utf8mb4",
-    }
-else:
-    # 生产环境（db201 → MySQL 集群）
-    DB_CONFIG = {
-        "host": "192.168.1.27",
-        "user": "tools",
-        "password": "***",
-        "database": "future_cn",
-        "charset": "utf8mb4",
-    }
+DB_CONFIG = {
+    "host": os.environ.get("DB_HOST", "192.168.1.202"),
+    "user": os.environ.get("DB_USER", "root"),
+    "password": os.environ.get("DB_PASSWORD", ""),
+    "database": os.environ.get("DB_DATABASE", "future_cn"),
+    "charset": "utf8mb4",
+}
 
-TABLE_NAME = "t_futures_info_exchange"
+def _table_name(config_override: dict | None = None) -> str:
+    """Return table name from config_override. Required via --table arg."""
+    if config_override and "table" in config_override:
+        return config_override["table"]
+    raise ValueError("table name required (pass --table to writer)")
+
+
+def _database_name(config_override: dict | None = None) -> str:
+    cfg = resolve_config(config_override)
+    return cfg.get("database", "future_cn")
 
 
 # ---- Helpers ----
@@ -44,18 +42,16 @@ def resolve_config(config_override: dict | None = None) -> dict:
     return cfg
 
 
-def _table_name(config_override: dict | None = None) -> str:
-    if config_override and "table" in config_override:
-        return config_override["table"]
-    return TABLE_NAME
+def get_connection(config_override: dict | None = None):
+    """Return a pymysql connection."""
+    cfg = resolve_config(config_override)
+    return pymysql.connect(**cfg)
 
 
-def _database_name(config_override: dict | None = None) -> str:
     cfg = resolve_config(config_override)
     return cfg.get("database", "future_cn")
 
 
-def get_connection(config_override: dict | None = None):
     """Return a pymysql connection."""
     cfg = resolve_config(config_override)
     return pymysql.connect(**cfg)
