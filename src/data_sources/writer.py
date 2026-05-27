@@ -10,7 +10,8 @@ from data_sources.modifier import (should_filter_contract,
     pad_czce_code,
     fix_dce_limit_prices, fix_gfe_margin, fix_gfe_limit_prices,
     fix_all_margin, fill_zero_volume_close,
-    fill_cffex_margin_from_history, fill_if_basis)
+    fill_cffex_margin_from_history, fill_if_basis,
+    inject_order_limits)
 from data_sources.trade_date import prev_trading_date
 from data_sources.db import create_table, upsert_records
 from mxz_utils.logging_config import get_logger
@@ -42,6 +43,7 @@ def _apply_modifiers(records):
     records = fill_zero_volume_close(records)
     records = fill_cffex_margin_from_history(records)
     records = fill_if_basis(records)
+    records = inject_order_limits(records)  # 静态注入 minoq/maxoq
 
     before = len(records)
     records = [

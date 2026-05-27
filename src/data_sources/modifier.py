@@ -709,3 +709,74 @@ def fill_if_basis(records: list) -> list:
             rec["if_basis"] = round(float(c) - ic, 4)
 
     return records
+
+
+# ===================================================================
+# 10. 下单量 (minoq/maxoq) 静态注入
+# ===================================================================
+
+# exchange suffix → config exchange name
+_SUFFIX_TO_EXCHANGE = {
+    ".DCE": "DCE", ".CZC": "CZCE", ".SHF": "SHFE",
+    ".INE": "INE", ".GFE": "GFEX", ".CFE": "CFFEX",
+}
+
+_ORDER_LIMITS: dict = {}
+
+
+def _load_order_limits():
+    """Lazy-load order_limits.csv."""
+    global _ORDER_LIMITS
+    if _ORDER_LIMITS:
+        return
+    import csv, os
+    config_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "config", "order_limits.csv"
+    )
+    with open(config_path, encoding="utf-8") as f:
+        reader = csv.DictReader(l for l in f if not l.startswith("#"))
+        for row in reader:
+            ex = row.get("exchange", "").strip()
+            vid = row.get("variety_id", "").strip().upper()
+            if not ex or not vid:
+                continue
+            entry = {}
+            for field in ("minoq", "maxoq_limit"):
+                val = row.get(field, "").strip()
+                if val:
+                    try:
+                        entry[field] = int(val)
+                    except ValueError:
+                        pass
+            if entry:
+                _ORDER_LIMITS[(ex, vid)] = entry
+
+
+def inject_order_limits(records: list) -> list:
+    """Fill minoq/maxoq from static config for records lacking them.
+
+    Only injects if the field is NOT already present (preserves CZCE).
+    """
+    _load_order_limits()
+    for rec in records:
+        code = rec.get("code", "")
+        suffix = "." + code.split(".")[-1] if "." in code else ""
+        exchange = _SUFFIX_TO_EXCHANGE.get(suffix)
+        if exchange is None:
+            continue
+        raw = code.split(".")[0]
+        variety_id = "".join(c for c in raw if c.isalpha()).upper()
+
+        entry = _ORDER_LIMITS.get((exchange, variety_id))
+        if entry is None:
+            entry = _ORDER_LIMITS.get((exchange, "ALL"))  # SHFE 通配
+        if entry is None:
+            continue
+
+        if "minoq" not in rec and "minoq" in entry:
+            rec["minoq"] = entry["minoq"]
+        if "maxoq" not in rec and "maxoq_limit" in entry:
+            rec["maxoq"] = entry["maxoq_limit"]
+
+    return records
