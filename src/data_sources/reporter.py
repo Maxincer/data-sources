@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import logging
 import os
 import smtplib
 import ssl
@@ -12,13 +13,15 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from typing import List, Optional
 
-import logging
 
 import requests
 
+from mxz_utils.logging_config import get_logger
 from data_sources.task import Task
 from data_sources.verifier import Verifier
-from mxz_utils.logging_config import get_logger
+from data_sources.db import fetch_table
+from data_sources.wind_client import fetch_wind_data
+
 
 
 _FULL_FIELDS = [
@@ -27,24 +30,14 @@ _FULL_FIELDS = [
     "minoq", "maxoq",
 ]
 
-_FEISHU_WEBHOOK = (
-    "https://open.feishu.cn/open-apis/bot/v2/hook/"
-    "7f1c49ef-6e6b-4c19-8152-8e25dfb8d688"
-)
+_FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK", "")
 
 
 class Reporter:
     """All pipeline reporting methods."""
-
-    _DEFAULT_SENDER = "mxz@wendao.fund"
-    _DEFAULT_RECIPIENTS = [
-        "fisher@wendao.fund",
-        "chendingzhong@wendao.fund",
-    ]
-
     def __init__(self, logger=None):
         self.logger = logger or get_logger(
-            "data_sources.reporter", logging.DEBUG, "./logs", "reporter",
+            "data_sources.reporter", logging.DEBUG, os.environ.get("LOG_DIR", "./logs"), "Reporter",
         )
 
     def task_report(self, tasks: List[Task], trade_date: str) -> None:
@@ -79,7 +72,6 @@ class Reporter:
     def generate_daily(
         self, date_str: str, *,
         skip_table_compare: bool = False,
-        email: bool = False,
         sender: Optional[str] = None,
         email_recipients: Optional[list[str]] = None,
     ) -> None:
@@ -88,14 +80,20 @@ class Reporter:
         Args:
             date_str: 交易日 YYYYMMDD
             skip_table_compare: True=阶段二，跳过两表对比，仅做 WSS 交叉验证
-            email: 是否同时发送邮件
         """
-        from data_sources.db import fetch_table
-        from data_sources.wind_client import fetch_wind_data
+        # 比对库 (旧表 t_futures_info) 配置，通过环境变量传入
+        _ref_db = {
+            k: v for k, v in {
+                "host": os.environ.get("REF_DB_HOST"),
+                "user": os.environ.get("REF_DB_USER"),
+                "password": os.environ.get("REF_DB_PASSWORD", ""),
+                "database": os.environ["REF_DB_DATABASE"]
+            }.items() if v is not None
+        } or None
 
         v = Verifier(self.logger)
         stats = v.get_field_stats(date_str)
-        abnormal = v.get_abnormal_nulls(date_str)
+        abnormal = v.get_abnormal_nulls(date_str, ref_config_override=_ref_db)
 
         feishu_sections = [
             self._build_file_size_section(date_str),
@@ -107,8 +105,8 @@ class Reporter:
         ours = fetch_table("t_futures_info_exchange", date_str)
 
         if not skip_table_compare:
-            # Phase 1a: 两表对比
-            wind_tbl = fetch_table("t_futures_info", date_str)
+            # Phase 1a: 两表对比 (旧表 t_futures_info 可能在独立 DB)
+            wind_tbl = fetch_table("t_futures_info", date_str, _ref_db)
             comp = v.compare_all(date_str, ours, wind_tbl)
             comparisons.append((
                 "cross-validation: t_futures_info_exchange vs t_futures_info",
@@ -117,14 +115,13 @@ class Reporter:
 
         # Phase 1b / Phase 2: Wind WSS 交叉验证
         wind_data = fetch_wind_data(date_str)
-        if wind_data:
-            wind_comp = v.compare_all(date_str, ours, wind_data)
-            title = (
-                "cross-validation: t_futures_info vs wss"
-                if skip_table_compare
-                else "cross-validation: t_futures_info_exchange vs wss"
-            )
-            comparisons.append((title, wind_comp))
+        wind_comp = v.compare_all(date_str, ours, wind_data)
+        title = (
+            "cross-validation: t_futures_info vs wss"
+            if skip_table_compare
+            else "cross-validation: t_futures_info_exchange vs wss"
+        )
+        comparisons.append((title, wind_comp))
 
         # Feishu
         for title, comp in comparisons:
@@ -135,15 +132,10 @@ class Reporter:
             f"📊 数据验证报告 {date_str}",
             "\n\n---\n\n".join(feishu_sections),
         )
-
-        # Email
-        if email:
-            recipients = email_recipients or self._DEFAULT_RECIPIENTS
-            sender_addr = sender or self._DEFAULT_SENDER
-            self._smtp_send(
-                date_str, stats, abnormal, comparisons,
-                sender=sender_addr, recipients=recipients,
-            )
+        self._smtp_send(
+            date_str, stats, abnormal, comparisons,
+            sender, email_recipients
+        )
 
         self.logger.info("Report for %s sent.", date_str)
 
@@ -153,10 +145,7 @@ class Reporter:
         recipients: Optional[list[str]] = None,
     ) -> None:
         """快捷方式：只发邮件。"""
-        self.generate_daily(
-            date_str, email=True,
-            sender=sender, email_recipients=recipients,
-        )
+        self.generate_daily(date_str,sender=sender,email_recipients=recipients)
 
     def _smtp_send(self, date_str, stats, abnormal, comparisons,
                    sender=None, recipients=None):
@@ -191,8 +180,10 @@ class Reporter:
         msg.attach(MIMEText("\n".join(html_parts), "html", "utf-8"))
 
         ctx = ssl.create_default_context()
-        with smtplib.SMTP_SSL("smtp.exmail.qq.com", 465,
-                              context=ctx) as server:
+        with smtplib.SMTP_SSL(
+            os.environ["SMTP_HOST"],
+            int(os.environ["SMTP_PORT"]),
+            context=ctx) as server:
             server.login(sender, password)
             server.sendmail(sender, recipients, msg.as_string())
         self.logger.info("邮件已发送至: %s", ", ".join(recipients))
@@ -224,7 +215,7 @@ class Reporter:
     @staticmethod
     def _build_file_size_section(date_str: str) -> str:
         """Section 1: file size changes from metadata."""
-        metadata_file = Path("./data/raw/.metadata.jsonl")
+        metadata_file = Path(os.environ.get("DATA_DIR", "./data")) / "raw" / ".metadata.jsonl"
         lines = [f"**交易日期**: {date_str}", ""]
         if metadata_file.exists():
             lines.append("**数据文件尺寸变化**:")
@@ -307,8 +298,7 @@ class Reporter:
         return "\n".join(lines)
 
     @staticmethod
-    @staticmethod
-    def _build_comparison_section(title: str, comp: dict, date_str: str) -> str:
+    def _build_comparison_section(title: str, comp: dict, _date_str: str) -> str:
         """Unified comparison report section.
 
         Structure:
@@ -412,18 +402,21 @@ class Reporter:
                     continue
                 diff_count = s.get("diff", 0)
                 limit = None if diff_count < 10 else 10
-                samples = s.get("sample_diffs", [])
+                samples = sorted(s.get("sample_diffs", []), key=lambda x: x.get("ratio", 0), reverse=True)
                 missing_b = s.get("sample_missing_in_new", [])
                 missing_a = s.get("sample_missing_in_original", [])
                 total = diff_count + len(missing_a) + len(missing_b)
                 lines.append(f"  **{ex} {field}** (共{total}条):")
                 for sd in samples[:limit]:
-                    diff = round(sd['original'] - sd['new'], 4) if isinstance(sd.get('original'), (int, float)) and isinstance(sd.get('new'), (int, float)) else "—"
+                    a_b = sd.get('a-b', '—')
+                    ratio = sd.get('ratio', '-')
+                    ratio_str = f" |a-b|/b={ratio:.6f}" if isinstance(ratio, (int, float)) else ""
                     lines.append(
                         f"    {sd['code']}:"
                         f" a={sd['original']}"
                         f" b={sd['new']}"
-                        f" a-b={diff}"
+                        f" a-b={a_b}"
+                        f"{ratio_str}"
                     )
                 for sd in missing_b:
                     lines.append(
@@ -444,7 +437,7 @@ class Reporter:
     @staticmethod
     def _email_file_size_section(date_str: str) -> str:
         """File size section for email, matching Feishu format."""
-        metadata_file = Path("./data/raw/.metadata.jsonl")
+        metadata_file = Path(os.environ.get("DATA_DIR", "./data")) / "raw" / ".metadata.jsonl"
         parts = ['<h2>📁 数据文件尺寸变化</h2>']
         if metadata_file.exists():
             parts.append(
@@ -506,7 +499,7 @@ class Reporter:
         )
 
     @staticmethod
-    def _email_comparison_section(title: str, comp: dict, date_str: str) -> str:
+    def _email_comparison_section(title: str, comp: dict, _date_str: str) -> str:
         """Unified comparison section for email (HTML)."""
         parts = [f'<h2>{title}</h2>']
 
@@ -610,15 +603,17 @@ class Reporter:
                         continue
                     diff_count = s.get("diff", 0)
                     limit = None if diff_count < 10 else 10
-                    samples = s.get("sample_diffs", [])
+                    samples = sorted(s.get("sample_diffs", []), key=lambda x: x.get("ratio", 0), reverse=True)
                     missing_b = s.get("sample_missing_in_new", [])
                     missing_a = s.get("sample_missing_in_original", [])
                     parts.append(f'<p><b>{ex} {field}</b></p>')
                     parts.append('<ul>')
                     for sd in samples[:limit]:
-                        diff = round(sd['original'] - sd['new'], 4) if isinstance(sd.get('original'), (int, float)) and isinstance(sd.get('new'), (int, float)) else "—"
+                        a_b = sd.get('a-b', '—')
+                        ratio = sd.get('ratio', '-')
+                        ratio_str = f" |a-b|/b={ratio:.6f}" if isinstance(ratio, (int, float)) else ""
                         parts.append(
-                            f'<li>{sd["code"]}: a={sd["original"]} b={sd["new"]} a-b={diff}</li>'
+                            f'<li>{sd["code"]}: a={sd["original"]} b={sd["new"]} a-b={a_b}{ratio_str}</li>'
                         )
                     for sd in missing_b:
                         parts.append(f'<li>{sd["code"]}: a={sd["original"]} b=—</li>')
@@ -629,7 +624,7 @@ class Reporter:
         return "\n".join(parts)
 
     @staticmethod
-    def _email_field_stats(stats: dict, abnormal: dict) -> str:
+    def _email_field_stats(stats: dict, _abnormal: dict) -> str:
         parts = ['<h2>📈 字段覆盖率统计</h2>']
         for ex in sorted(stats.keys()):
             if ex == "CSI":
@@ -672,24 +667,6 @@ class Reporter:
         )
 
 
-
-
-
-def _td(val) -> str:
-    """格式化表格单元格为 HTML <td>。"""
-    if val is None:
-        return '<td style="text-align:center">—</td>'
-    try:
-        fv = float(val)
-        if abs(fv) >= 1_000_000:
-            return f'<td style="text-align:right">{fv:,.0f}</td>'
-        if fv == int(fv):
-            return f'<td style="text-align:right">{int(fv)}</td>'
-        return f'<td style="text-align:right">{fv:g}</td>'
-    except Exception:
-        return f'<td>{val}</td>'
-
-
 def main():
     """CLI entry point. Supports python -m data_sources.reporter."""
     parser = argparse.ArgumentParser(
@@ -717,13 +694,10 @@ def main():
         if args.recipients
         else None
     )
-    send_email = bool(args.sender and recipients)
-
     r = Reporter()
     r.generate_daily(
         date_str,
         skip_table_compare=args.skip_table_compare,
-        email=send_email,
         sender=args.sender,
         email_recipients=recipients,
     )

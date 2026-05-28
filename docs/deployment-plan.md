@@ -117,7 +117,7 @@ data-sources/
 
 ### 3.3 任务调度
 
-rutask（Rust Job Manager），Web: `http://192.168.1.201:8877`，JSON5 配置。
+rutask（Rust Job Manager），配置文件：`/home/data_ops/rustask/rustask.local.json5`
 
 ---
 
@@ -200,90 +200,90 @@ Wind 继续写 t_futures_info（不受影响）
 | 1 | Playwright Chromium | WSL `~/.cache/ms-playwright/chromium-1208/` | `~/.cache/ms-playwright/chromium-1208/` |
 | 2 | Headless Shell | WSL `~/.cache/ms-playwright/chromium_headless_shell-1208/` | `~/.cache/ms-playwright/chromium_headless_shell-1208/` |
 | 3 | 系统库 .deb | `apt download libnspr4 libnss3 libasound2t64` | `dpkg -i` 安装 |
-| 4 | data/ 目录 | 项目已有 (274MB) | `~/data-sources/data/` |
-| 5 | data-sources .whl | `pip wheel` 构建 | `pip install --user` |
+| 4 | Python 依赖 wheels | `pip download -r requirements.txt` → `offline/wheels/` | `pip3 install --user --no-index --find-links=offline/wheels` |
+| 5 | 项目源码 | 项目目录（不含 .venv/.git） | `~/data-sources/` |
 | 6 | scripts/ | pipeline.sh + deploy.sh | `~/data-sources/scripts/` |
 
-**不需要 Python .deb** — db201 已有 Python 3.10 + cpp_py，`pip install --user` 自然可见系统 cpp_py。
+**不需要 Python .deb / .whl** — db201 已有 Python 3.10 + cpp_py，离线 wheels 通过 `pip install --no-index` 安装即可。
 
 ### 7.2 打包命令 (WSL)
 
 ```bash
 cd /mnt/e/projects/data-sources
 
-# Playwright 浏览器（本地已有）
-mkdir -p offline/playwright
-cp -r ~/.cache/ms-playwright/chromium-1208/ offline/playwright/
-cp -r ~/.cache/ms-playwright/chromium_headless_shell-1208/ offline/playwright/
+# Python 依赖离线包（一般无需重下载）
+pip wheel --no-deps -w deploy/offline/pip-deps .
+pip wheel --no-deps -w deploy/offline/pip-deps libs/mxz-utils/
+# pip download -d deploy/offline/pip-deps -r requirements.txt
 
-# 系统 .deb
-mkdir -p offline/sys-libs && cd offline/sys-libs
-apt download libnspr4 libnss3 libasound2t64
-cd ../..
+# 打包：项目源码 + 离线依赖
+tar -czf "/tmp/$(date +%Y%m%d)-$(git rev-parse --short HEAD).tar.gz" \
+  --exclude='.venv' --exclude='.git' --exclude='__pycache__' \
+  --exclude='*.pyc' --exclude='logs' \
+  -C /mnt/e/projects \
+  data-sources
 
-# 构建 whl
-pip wheel --no-deps -w dist/ .
-
-# 打包
-tar czf /tmp/data-sources-offline.tar.gz offline/ data/ scripts/
+# 上传到 releases 服务器
+scp /tmp/*.tar.gz server202:/data3/releases/data-sources/
 ```
 
 ### 7.3 传输到 db201（通过 server202 跳板）
 
 ```bash
 scp /tmp/data-sources-offline.tar.gz mini_apps@192.168.1.202:/tmp/
-scp dist/data_sources-*.whl mini_apps@192.168.1.202:/tmp/
 ssh mini_apps@192.168.1.202 \
-  "scp /tmp/data-sources-offline.tar.gz /tmp/data_sources-*.whl data_ops@192.168.1.201:~/"
+  "scp /tmp/data-sources-offline.tar.gz data_ops@192.168.1.201:~/"
 ```
 
 ### 7.4 db201 上安装
 
 ```bash
-ssh -J mini_apps@192.168.1.202 data_ops@192.168.1.201
-cd ~ && tar xzf data-sources-offline.tar.gz
+ssh data_ops@192.168.1.201
+cd ~
+
+# 下载并解压
+RELEASE="20260528-f3b9e79"   # 替换为实际版本
+wget -O /tmp/${RELEASE}.tar.gz \
+  http://releases.corp.wendao.fund/data-sources/${RELEASE}.tar.gz
+tar -xzf /tmp/${RELEASE}.tar.gz
 
 # 系统库
-sudo dpkg -i offline/sys-libs/*.deb 2>/dev/null || true
+sudo dpkg -i data-sources/deploy/offline/sys-libs/*.deb 2>/dev/null || true
+sudo dpkg -i data-sources/deploy/offline/chromium-deps/*.deb 2>/dev/null || true
 
-# Playwright
+# Playwright 浏览器
 mkdir -p ~/.cache/ms-playwright
-cp -r offline/playwright/chromium-1208 ~/.cache/ms-playwright/
-cp -r offline/playwright/chromium_headless_shell-1208 ~/.cache/ms-playwright/
+cp -r data-sources/deploy/offline/playwright/chromium-1208 ~/.cache/ms-playwright/
+cp -r data-sources/deploy/offline/playwright/chromium_headless_shell-1208 ~/.cache/ms-playwright/
 
-# 安装 data-sources
-pip install --user --force-reinstall data_sources-*.whl
+# Python 依赖（离线安装）
+cd data-sources
+pip3 install --user --no-index --find-links=deploy/offline/pip-deps -r requirements.txt
 
-# 部署项目文件
-mkdir -p ~/data-sources && mv data scripts ~/data-sources/
+# 验证
+python3 -c "import pymysql, playwright, pandas"   # 无报错
 ```
 
 ---
 
 ## 八、数据文件迁移
 
-```bash
-# 已在 7.2 打包中一起处理
-# data/ 目录 (274MB, 367 文件) 随 offline.tar.gz 一起传输
-```
+`data/` 目录随离线包一起打包传输（见 7.2），无需单独处理。
 
----
+解压后在 `/home/data_ops/data-sources/data/` 即可使用。
 
 ## 九、rutask 配置
+
+配置文件：`/home/data_ops/rustask/rustask.local.json5`
 
 ### 阶段一
 
 ```json5
 data_sources_exchange: {
-  start_cron: "00 30 16 * * 1-5",
-  cmd: "bash scripts/pipeline.sh",
-  cwd: "/home/data_ops/data-sources",
-  env: {
-    WRITER_HOST: "192.168.1.27",
-    WRITER_TABLE: "t_futures_info_exchange",
-    SMTP_PASSWORD: "***",
-  },
-  output: "/home/data_ops/data-sources/logs/pipeline-$datetime.log",
+  start_cron: "00 40 16 * * 1-5",
+  cmd: "bash data-sources/scripts/pipeline.sh",
+  cwd: "/home/data_ops",
+  output: "/home/data_ops/log/pipeline-$datetime.log",
   safe_start: true,
   life_time: 7200,
 }
@@ -293,21 +293,16 @@ data_sources_exchange: {
 
 ```json5
 data_sources: {
-  start_cron: "00 30 16 * * 1-5",
-  cmd: "bash scripts/pipeline.sh",
-  cwd: "/home/data_ops/data-sources",
-  env: {
-    WRITER_HOST: "192.168.1.27",
-    WRITER_TABLE: "t_futures_info",
-    SMTP_PASSWORD: "***",
-  },
-  output: "/home/data_ops/data-sources/logs/pipeline-$datetime.log",
+  start_cron: "00 40 16 * * 1-5",
+  cmd: "bash data-sources/scripts/pipeline.sh",
+  cwd: "/home/data_ops",
+  output: "/home/data_ops/log/pipeline-$datetime.log",
   safe_start: true,
   life_time: 7200,
 }
 ```
 
-pipeline.sh 通过 `SKIP_TABLE_COMPARE=1` 环境变量控制，rutask 的 env 中设置即可。
+`pipeline.sh` 根据是否设置 `DEV_MODE` 自动选择 DB 连接参数。阶段切换通过 `WRITER_TABLE` 和 `SKIP_TABLE_COMPARE` 控制，在 `pipeline.sh` 中修改。
 
 ---
 

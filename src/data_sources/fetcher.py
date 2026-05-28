@@ -24,11 +24,11 @@ from data_sources.verifier import Verifier
 from data_sources.reporter import Reporter
 from data_sources.configs import build_task_configs, DCE_BASE_URL
 
-RAW_DATA_DIR = Path("./data/raw")
+RAW_DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")) / "raw"
 RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
 METADATA_FILE = RAW_DATA_DIR / ".metadata.jsonl"
-DCE_API_KEY = "ofxc69rpmd59"
-DCE_API_SECRET = "2UdFW^2G4!4^7#@URqWx"
+DCE_API_KEY = os.environ["DCE_API_KEY"]
+DCE_API_SECRET = os.environ["DCE_API_SECRET"]
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +105,7 @@ class Fetcher:
         self.logger = get_logger(
             name="Fetcher",
             level="INFO",
-            dirpath_logs="./logs",
+            dirpath_logs=os.environ.get("LOG_DIR", "./logs"),
             logfile_basename="Fetcher",
         )
         self.fake_headers = {
@@ -213,25 +213,6 @@ class Fetcher:
 
     def _fetch_ine_settlement(self, task: Task) -> Dict:
         return self._do_fetch_get(task, "INE settlement")
-
-    def _fetch_czce_settlement(self, task: Task) -> Dict:
-        return self._do_fetch_get(task, "CZCE settlement")
-
-    def _fetch_cffex_market(self, task: Task) -> Dict:
-        return self._do_fetch_get(task, "CFFEX market")
-
-    def _fetch_cffex_tradepara(self, task: Task) -> Dict:
-        return self._do_fetch_get(task, "CFFEX tradepara")
-
-    def _fetch_shfe_tradepara(self, task: Task) -> Dict:
-        return self._do_fetch_get(task, "SHFE tradepara")
-
-    def _fetch_ine_tradepara(self, task: Task) -> Dict:
-        return self._do_fetch_get(task, "INE tradepara")
-
-    def _fetch_czce_tradepara(self, task: Task) -> Dict:
-        return self._do_fetch_get(task, "CZCE tradepara")
-
     def _fetch_gfex_settlement(self, task: Task) -> Dict:
         try:
             # GFEX 结算参数表要求 trade_date 以数组格式传入才能正确区分日期

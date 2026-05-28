@@ -1,22 +1,54 @@
 #!/usr/bin/env bash
-# Data pipeline – works in both dev (DEV_MODE=1) and prod (pip install --user)
+# Data pipeline – works in both dev (DEV_MODE=1) and prod.
 # Usage:
-#   Production / crontab:          bash scripts/pipeline.sh [TRADE_DATE]
-#   Development:          DEV_MODE=1 bash scripts/pipeline.sh [TRADE_DATE]
+#  Production:                 bash data-sources/scripts/pipeline.sh [TRADE_DATE]
+#  Development:                DEV_MODE=1 bash scripts/pipeline.sh [TRADE_DATE]
 #
-# Log output goes to stdout/stderr. crontab/rutask handles redirection:
-#   rutask cron: "00 45 16 * * 1-5"
-
-# Ensure ~/.local/bin is on PATH (crontab may lack this)
-export PATH="$HOME/.local/bin:$PATH"
+#  Rutask: cwd=/home/data_ops, cmd=bash data-sources/scripts/pipeline.sh
+#  Cron:   00 40 16 * * 1-5
 
 # Resolve project root (works if script is in <project>/scripts/)
 cd "$(dirname "$0")/.." || exit 1
 
 TRADE_DATE="${1:-$(date +%Y%m%d)}"
-TRADE_DATES_FILE="data/trade_dates.txt"
+
+# ---- 环境自适应 ----
+if [ -n "${DEV_MODE}" ]; then
+    # 开发模式
+    export DB_HOST="192.168.1.202"
+    export DB_USER="root"
+    export DB_PASSWORD="root0808"
+    export DB_DATABASE="future_cn"
+
+    # 比对库 (旧表 t_futures_info on 1.27)
+    export REF_DB_HOST="192.168.1.27"
+    export REF_DB_USER="tools"
+    export REF_DB_PASSWORD="tools0512"
+    PIP="$(dirname "$0")/../.venv/bin/python3"
+    export PYTHONPATH="${PWD}/src:${PWD}/libs/mxz-utils/src"
+    export DATA_DIR="./data"
+    export LOG_DIR="./logs"
+    export LD_LIBRARY_PATH="$HOME/.local/chrome-libs"
+    RUN_FETCHER="${PIP} -m data_sources.fetcher run ${TRADE_DATE}"
+    RUN_WRITER="${PIP} -m data_sources.writer --date ${TRADE_DATE} ${WRITER_OPTS}"
+    RUN_REPORTER="${PIP} -m data_sources.reporter ${TRADE_DATE}"
+else
+    # 生产模式：系统 Python 3.10
+    export DB_HOST="192.168.1.27"
+    export DB_USER="tools"
+    export DB_PASSWORD="tools0512"
+    export DB_DATABASE="future_cn"
+    export DATA_DIR="/data2_backup/data_sources_data"
+    export LOG_DIR="/home/data_ops/log"
+    export PLAYWRIGHT_BROWSERS_PATH="/home/data_ops/playwright-browsers"
+    # 生产不设 REF_DB_*，比对走主库
+    RUN_FETCHER="python3 -m data_sources.fetcher run ${TRADE_DATE}"
+    RUN_WRITER="python3 -m data_sources.writer --date ${TRADE_DATE} ${WRITER_OPTS}"
+    RUN_REPORTER="python3 -m data_sources.reporter ${TRADE_DATE}"
+fi
 
 # ---- 交易日判定 ----
+TRADE_DATES_FILE="${DATA_DIR}/trade_dates.txt"
 if [ -f "${TRADE_DATES_FILE}" ]; then
     if ! grep -qx "${TRADE_DATE}" "${TRADE_DATES_FILE}" 2>/dev/null; then
         echo "[$(date '+%F %T')] ${TRADE_DATE} 非交易日，跳过 pipeline"
@@ -28,8 +60,8 @@ fi
 
 # ---- 时间门禁 ----
 CURRENT_HM=$(date +%H%M)
-if [ "$CURRENT_HM" -lt 1645 ]; then
-    echo "[$(date '+%F %T')] 当前 ${CURRENT_HM} < 1645，跳过 pipeline"
+if [ "$CURRENT_HM" -lt 1640 ]; then
+    echo "[$(date '+%F %T')] 当前 ${CURRENT_HM} < 1640，跳过 pipeline"
     exit 0
 fi
 
@@ -43,37 +75,16 @@ WRITER_OPTS="--table $WRITER_TABLE"
 REPORTER_OPTS=""
 [ -n "${SKIP_TABLE_COMPARE:-}" ] && REPORTER_OPTS="--skip-table-compare"
 
-# ---- 环境自适应 ----
-if [ -n "${DEV_MODE}" ]; then
-    # 开发模式
-    export DB_HOST="192.168.1.202"
-    export DB_USER="root"
-    export DB_PASSWORD="root0808"
-    export DB_DATABASE="future_cn"
-    # export DB_HOST="192.168.1.27"
-    # export DB_USER="tools"
-    # export DB_PASSWORD="tools0512"
-    # export DB_DATABASE="future_cn"
-    PIP="$(dirname "$0")/../.venv/bin/python3"
-    export PYTHONPATH="src:libs/mxz-utils/src"
-    export LD_LIBRARY_PATH="$HOME/.local/chrome-libs"
-    RUN_FETCHER="${PIP} -m data_sources.fetcher run ${TRADE_DATE}"
-    RUN_WRITER="${PIP} -m data_sources.writer --date ${TRADE_DATE} ${WRITER_OPTS}"
-    RUN_REPORTER="${PIP} -m data_sources.reporter ${TRADE_DATE}"
-else
-    # 生产模式：pip install --user
-    export DB_HOST="192.168.1.27"
-    export DB_USER="tools"
-    export DB_PASSWORD="tools0512"
-    export DB_DATABASE="future_cn"
-    RUN_FETCHER="fetcher run ${TRADE_DATE}"
-    RUN_WRITER="writer --date ${TRADE_DATE}${WRITER_OPTS}"
-    RUN_REPORTER="reporter ${TRADE_DATE}"
-fi
-
 # ---- 密码与收件人 ----
 SMTP_PASSWORD="NBnDH84qZHZWFrTC"
 export SMTP_PASSWORD
+export FEISHU_WEBHOOK="https://open.feishu.cn/open-apis/bot/v2/hook/7f1c49ef-6e6b-4c19-8152-8e25dfb8d688"
+export SMTP_HOST="smtp.exmail.qq.com"
+export SMTP_PORT="465"
+export WIND_RPC_HOST="192.168.2.9"
+export WIND_RPC_PORT="3801"
+export DCE_API_KEY="ofxc69rpmd59"
+export DCE_API_SECRET="2UdFW^2G4!4^7#@URqWx"
 SENDER="robot@wendao.fund"
 #RECIPIENTS="fisher@wendao.fund,chendingzhong@wendao.fund,mxz@wendao.fund"
 RECIPIENTS="mxz@wendao.fund"

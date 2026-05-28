@@ -3,7 +3,10 @@
 
 import argparse
 import logging
+import os
 from pathlib import Path
+
+from mxz_utils.logging_config import get_logger
 
 from data_sources.parser import parse_file, ParseStats, merge_by_code_date
 from data_sources.modifier import (should_filter_contract,
@@ -11,16 +14,15 @@ from data_sources.modifier import (should_filter_contract,
     fix_dce_limit_prices, fix_gfe_margin, fix_gfe_limit_prices,
     fix_all_margin, fill_zero_volume_close,
     fill_cffex_margin_from_history, fill_if_basis,
-    inject_order_limits)
+    inject_order_limits, margin_to_pct)
 from data_sources.trade_date import prev_trading_date
-from data_sources.db import upsert_rows
-from mxz_utils.logging_config import get_logger
+from data_sources.db import upsert_rows, delete_rows
 
 
-RAW_DIR = Path("./data/raw")
+RAW_DIR = Path(os.environ.get("DATA_DIR", "./data")) / "raw"
 
 logger = get_logger(
-    "data_sources.writer", logging.DEBUG, "./logs", "writer",
+    "data_sources.writer", logging.DEBUG, os.environ.get("LOG_DIR", "./logs"), "Writer",
 )
 
 
@@ -44,6 +46,19 @@ def _apply_modifiers(records):
     records = fill_cffex_margin_from_history(records)
     records = fill_if_basis(records)
     records = inject_order_limits(records)  # 静态注入 minoq/maxoq
+
+    # ---- 公司口径调整 - Wind 标准 ----
+    for r in records:
+        # margin: decimal → 百分数 (0.12 → 12.0)
+        if r.get("long_margin") is not None:
+            r["long_margin"] = margin_to_pct(r["long_margin"])
+        if r.get("short_margin") is not None:
+            r["short_margin"] = margin_to_pct(r["short_margin"])
+        # date: YYYYMMDD → YYYY-MM-DD
+        d = r.get("date", "")
+        if d and isinstance(d, str) and len(d) == 8:
+            r["date"] = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+    # ---- 公司口径调整 end ----
 
     before = len(records)
     records = [
@@ -100,7 +115,8 @@ def _ensure_prev_dce_data(date_str: str):
         logger.warning("下载失败: %s", e)
 
 
-def write_trade_date(date_str: str, dry_run: bool = False,
+def write_trade_date(date_str: str, table: str,
+                      dry_run: bool = False,
                       config_override: dict | None = None):
     """Parse and write data for a specific trade date."""
     _ensure_prev_dce_data(date_str)
@@ -138,50 +154,15 @@ def write_trade_date(date_str: str, dry_run: bool = False,
     records = merge_by_code_date(records)
     records = _apply_modifiers(records)
 
-    target_records = [r for r in records if r.get("date") == date_str]
+    norm_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+    target_records = [r for r in records if r.get("date") == norm_date]
     logger.info("目标日期记录数: %s", len(target_records))
     if dry_run:
         return len(target_records), [s.stats_summary for s in stats_list]
-    written = upsert_rows(target_records, config_override)
-    logger.info("写入完成: %s 条", written)
-    return written, [s.stats_summary for s in stats_list]
 
-
-def write_all(dry_run: bool = False,
-              config_override: dict | None = None):
-    """Parse and write all raw data files."""
-    records = []
-    stats_list = []
-
-    for fpath in sorted(RAW_DIR.iterdir()):
-        if not fpath.is_file() or fpath.suffix == ".jsonl":
-            continue
-        name = fpath.name
-        exchange = name.split(".")[1] if len(name.split(".")) > 1 else "?"
-        data_type = name.split(".")[2] if len(name.split(".")) > 2 else "?"
-        stats = ParseStats(exchange, data_type)
-        try:
-            parsed = parse_file(fpath)
-            stats.total = len(parsed)
-            for rec in parsed:
-                stats.add_record(rec)
-            records.extend(parsed)
-            logger.debug("解析 %s: %s 条记录", fpath.name, len(parsed))
-        except Exception as e:
-            stats.add_error(str(e))
-            logger.error("解析失败 %s: %s", fpath.name, e)
-        stats_list.append(stats)
-
-    if not records:
-        logger.info("无数据可处理")
-        return 0, [s.stats_summary for s in stats_list]
-
-    records = merge_by_code_date(records)
-    records = _apply_modifiers(records)
-    logger.info("写入总记录数: %s", len(records))
-    if dry_run:
-        return len(records), [s.stats_summary for s in stats_list]
-    written = upsert_rows(records, config_override)
+    deleted = delete_rows(date_str, table, config_override)
+    logger.info("已删除 %s 条旧数据 (date=%s)", deleted, date_str)
+    written = upsert_rows(target_records, table, config_override)
     logger.info("写入完成: %s 条", written)
     return written, [s.stats_summary for s in stats_list]
 
@@ -197,7 +178,7 @@ def main():
     )
     parser.add_argument(
         "--host", default=None,
-        help="MySQL host (default: 192.168.1.202)"
+        help="MySQL host (from env DB_HOST or override)"
     )
     parser.add_argument(
         "--port", type=int, default=None,
@@ -218,16 +199,12 @@ def main():
             "host": args.host,
             "port": args.port,
             "database": args.db,
-            "table": args.table,
         }.items() if v is not None
     }
 
-    if args.date:
-        written, stats = write_trade_date(
-            args.date, args.dry_run, config_override
-        )
-    else:
-        written, stats = write_all(args.dry_run, config_override)
+    written, stats = write_trade_date(
+        args.date, args.table, args.dry_run, config_override
+    )
 
     action = "[DRY RUN]" if args.dry_run else ""
     print(f"{action} Records written: {written}")

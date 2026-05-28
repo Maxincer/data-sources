@@ -10,31 +10,11 @@ Usage:
 """
 
 import json
-import sys
 from typing import Dict, List, Optional
 
-import pymysql
+import pymysql.cursors
 
-
-DB_CONFIG = {
-    "host": "192.168.1.202",
-    "user": "root",
-    "password": "root0808",
-    "database": "future_cn",
-    "charset": "utf8mb4",
-}
-
-ORIGINAL_TABLE = "t_futures_info"
-NEW_TABLE = "t_futures_info_exchange"
-
-# t_futures_info 已迁移到 201，只读；t_futures_info_exchange 仍在 202
-DB_CONFIG_ORIG = {
-    "host": "192.168.1.201",
-    "user": "root",
-    "password": "root0808",
-    "database": "future_cn",
-    "charset": "utf8mb4",
-}
+from data_sources.db import get_connection, resolve_config
 
 
 class CompareResult:
@@ -56,7 +36,7 @@ class CompareResult:
     def summary(self) -> Dict:
         # 按偏差降序排列
         sorted_samples = sorted(self.sample_diffs,
-                                key=lambda x: x.get("deviation_pct", 0),
+                                key=lambda x: x.get("ratio", 0),
                                 reverse=True)
         return {
             "field": self.field,
@@ -193,16 +173,15 @@ class Verifier:
     # Helpers
     # -----------------------------------------------------------------
 
-    def _get_conn(self):
-        return pymysql.connect(
-            **DB_CONFIG, cursorclass=pymysql.cursors.DictCursor
-        )
+    def _get_conn(self, config_override: dict | None = None):
+        """DB connection via env-configured db.py."""
+        conn = get_connection(config_override)
+        conn.cursorclass = pymysql.cursors.DictCursor
+        return conn
 
-    def _get_conn_orig(self):
-        """Connection to server 201 (t_futures_info only, read-only)."""
-        return pymysql.connect(
-            **DB_CONFIG_ORIG, cursorclass=pymysql.cursors.DictCursor
-        )
+    def _get_db(self, config_override: dict | None = None) -> str:
+        """Return current database name."""
+        return resolve_config(config_override)["database"]
 
     @staticmethod
     def _format_date(date_val) -> str:
@@ -214,119 +193,29 @@ class Verifier:
 
     # -----------------------------------------------------------------
     # Cross-table field comparison (legacy, kept for compatibility)
-    # -----------------------------------------------------------------
 
-    def compare_fields(
-        self,
-        fields: Optional[List[str]] = None,
-        tolerance: float = 0.01,
-        limit_dates: Optional[int] = None,
-    ) -> Dict[str, Dict]:
+    def get_field_stats(self, target_date: str,
+                        table: str = "t_futures_info_exchange",
+                        config_override: dict | None = None) -> Dict:
         """
-        Compare specified fields between original and new table.
+        Get field valid/missing stats for a given table.
 
         Args:
-            fields: List of field names to compare. Default = all.
-            tolerance: Relative tolerance for float comparison.
-            limit_dates: If set, only compare the N most recent dates.
-
-        Returns:
-            Dict[field_name, CompareResult.summary]
-        """
-        if fields is None:
-            fields = [
-                "open", "high", "low", "close", "volume",
-                "amt", "oi", "settle", "long_margin", "short_margin",
-            ]
-
-        conn = self._get_conn()
-        try:
-            with conn.cursor() as cur:
-                # Get date range
-                date_filter = ""
-                if limit_dates:
-                    cur.execute(
-                        f"SELECT DISTINCT date FROM `future_cn`.{NEW_TABLE} "
-                        f"ORDER BY date DESC LIMIT {limit_dates}"
-                    )
-                    rows = cur.fetchall()
-                    dates = tuple(r["date"] for r in rows)
-                    if dates:
-                        date_filter = f"AND o.date IN {dates}"
-
-                col_list = ", ".join(
-                    [f"o.{f} AS o_{f}" for f in fields]
-                    + [f"n.{f} AS n_{f}" for f in fields]
-                )
-                sql = f"""
-                    SELECT o.code, o.date, {col_list}
-                    FROM `future_cn`.{ORIGINAL_TABLE} o
-                    INNER JOIN `future_cn`.{NEW_TABLE} n
-                        ON o.code = n.code AND o.date = n.date
-                    WHERE 1=1 {date_filter}
-                    ORDER BY o.date DESC
-                """
-                cur.execute(sql)
-                rows = cur.fetchall()
-
-        finally:
-            conn.close()
-
-        results = {f: CompareResult(f) for f in fields}
-
-        for row in rows:
-            code, date = row["code"], self._format_date(row["date"])
-            for field in fields:
-                ov = row.get(f"o_{field}")
-                nv = row.get(f"n_{field}")
-                cr = results[field]
-
-                if ov is None and nv is None:
-                    continue
-                if ov is None and nv is not None:
-                    cr.total_missing_original += 1
-                    continue
-                if ov is not None and nv is None:
-                    cr.total_missing_new += 1
-                    continue
-
-                ov = float(ov)
-                nv = float(nv)
-                diff = abs(ov - nv)
-                max_abs = max(abs(ov), abs(nv))
-                deviation = diff / max_abs * 100 if max_abs > 0 else 0.0
-
-                if deviation > tolerance:
-                    cr.total_diff += 1
-                    cr.max_deviation = max(cr.max_deviation, deviation)
-                    if len(cr.sample_diffs) < 10:
-                        cr.sample_diffs.append({
-                            "code": code,
-                            "date": date,
-                            "original": ov,
-                            "new": nv,
-                            "deviation_pct": round(deviation, 4),
-                        })
-                else:
-                    cr.total_matched += 1
-
-        return {f: r.summary for f, r in results.items()}
-
-    def get_field_stats(self, target_date: str) -> Dict:
-        """
-        Get field valid/missing stats for t_futures_info_exchange.
+            target_date: YYYYMMDD
+            table: MySQL table name
+            config_override: optional dict to override DB host/user/password
 
         Returns:
             Dict[exchange][field] = {total, non_null, null_pct}
         """
-        conn = self._get_conn()
+        conn = self._get_conn(config_override)
+        db = self._get_db(config_override)
         try:
             with conn.cursor() as cur:
                 dt = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:8]}"
-                # Get all exchanges
                 cur.execute(f"""
                     SELECT DISTINCT SUBSTRING_INDEX(code, '.', -1) AS ex
-                    FROM future_cn.t_futures_info_exchange
+                    FROM `{db}`.`{table}`
                     WHERE date = '{dt}'
                     ORDER BY ex
                 """)
@@ -342,13 +231,10 @@ class Verifier:
                 for ex in exchanges:
                     result[ex] = {}
                     for field in fields:
-                        # abnormal_null: 字段缺失且(amt缺失或amt!=0)才计数
-                        # amt字段本身缺失则始终计数
-                        # if_basis: 仅CFE的股指期货(IF/IC/IH/IM)有该字段, 其余合约天然为空不计异常
                         extra_abn = ""
                         if field == "if_basis":
                             if ex != "CFE":
-                                extra_abn = " AND 1=0"  # 非CFE不计数
+                                extra_abn = " AND 1=0"
                             else:
                                 extra_abn = " AND code REGEXP '^(IF|IC|IH|IM)'"
                         cur.execute(f"""
@@ -357,7 +243,7 @@ class Verifier:
                                    SUM(CASE WHEN {field} IS NULL AND (
                                        '{field}' = 'amt' OR amt IS NULL OR amt != 0
                                    ){extra_abn} THEN 1 ELSE 0 END) AS abnormal_null
-                            FROM future_cn.t_futures_info_exchange
+                            FROM `{db}`.`{table}`
                             WHERE date = '{dt}'
                               AND SUBSTRING_INDEX(code, '.', -1) = '{ex}'
                         """)
@@ -378,20 +264,28 @@ class Verifier:
     # Abnormal null detail records
     # -----------------------------------------------------------------
 
-    def get_abnormal_nulls(self, target_date: str) -> Dict[str, list]:
+    def get_abnormal_nulls(self, target_date: str,
+                           config_override: dict | None = None,
+                           ref_config_override: dict | None = None) -> Dict[str, list]:
         """
         获取异常空值明细：字段缺失且 amt≠0 的记录。
+
+        Args:
+            target_date: YYYYMMDD
+            config_override: 新表 DB 配置 (默认走 env)
+            ref_config_override: 旧表 DB 配置 (默认同新表)
 
         Returns:
             Dict[exchange] = [{code, open, high, low, close, amt, ...}] 按 amt 降序
         """
-        conn = self._get_conn()
+        conn = self._get_conn(config_override)
+        db = self._get_db(config_override)
         try:
             with conn.cursor() as cur:
                 dt = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:8]}"
                 cur.execute(f"""
                     SELECT DISTINCT SUBSTRING_INDEX(code, '.', -1) AS ex
-                    FROM future_cn.t_futures_info_exchange
+                    FROM `{db}`.t_futures_info_exchange
                     WHERE date = '{dt}'
                     ORDER BY ex
                 """)
@@ -404,14 +298,13 @@ class Verifier:
                 for ex in exchanges:
                     if ex == "CSI":
                         continue
-                    # Find records where ANY field is null but amt is non-zero
                     null_conditions = " OR ".join(
                         f"{f} IS NULL" for f in fields
                     )
                     col_list = "code, " + ", ".join(fields)
                     sql = f"""
                         SELECT {col_list}
-                        FROM future_cn.t_futures_info_exchange
+                        FROM `{db}`.t_futures_info_exchange
                         WHERE date = '{dt}'
                           AND SUBSTRING_INDEX(code, '.', -1) = '{ex}'
                           AND ({null_conditions})
@@ -427,19 +320,19 @@ class Verifier:
                     for row in rows:
                         rec = dict(row)
                         code = rec["code"]
-                        # 对比旧表：标记哪些字段旧表也 NULL
                         null_fields = [f for f in fields
                                        if rec.get(f) is None
                                        and f != "amt"]
                         if not null_fields:
                             continue
-                        # 查旧表同条数据（走 201）
-                        orig_conn = self._get_conn_orig()
+                        # 查旧表同条数据
+                        ref_db = self._get_db(ref_config_override)
+                        orig_conn = self._get_conn(ref_config_override)
                         try:
                             with orig_conn.cursor() as orig_cur:
                                 orig_cur.execute(f"""
                                     SELECT {', '.join(null_fields)}
-                                    FROM future_cn.t_futures_info
+                                    FROM `{ref_db}`.t_futures_info
                                     WHERE code = '{code}' AND date = '{dt}'
                                 """)
                                 old_row = orig_cur.fetchone()
@@ -629,17 +522,15 @@ class Verifier:
 
                 if avf != bvf:
                     cr.total_diff += 1
-                    if isinstance(avf, (int, float)) and isinstance(bvf, (int, float)):
-                        max_abs = max(abs(avf), abs(bvf))
-                        deviation = abs(avf - bvf) / max_abs * 100 if max_abs > 0 else 0.0
-                    else:
-                        deviation = 0.0
-                    cr.max_deviation = max(cr.max_deviation, deviation)
+                    abs_diff = abs(avf - bvf) if isinstance(avf, (int, float)) and isinstance(bvf, (int, float)) else 0
+                    ratio = abs_diff / abs(bvf) if bvf else 0
+                    cr.max_deviation = max(cr.max_deviation, ratio)
                     if len(cr.sample_diffs) < 10:
                         cr.sample_diffs.append({
                             "code": code, "date": target_date,
                             "original": avf, "new": bvf,
-                            "deviation_pct": round(deviation, 4),
+                            "a-b": round(avf - bvf, 4),
+                            "ratio": round(ratio, 6),
                         })
                 else:
                     cr.total_matched += 1
@@ -764,7 +655,7 @@ class Verifier:
             lines.append(f"  ── {ex} ──")
 
             # Header row
-            header = f"  {'字段':<14s} | {'匹配':>6s} | {'差异':>4s} | {'原表缺':>5s} | {'新表缺':>5s} | {'缺异':>5s} | {'最大偏差':>8s}"
+            header = f"  {'字段':<14s} | {'匹配':>6s} | {'差异':>4s} | {'原表缺':>5s} | {'新表缺':>5s} | {'缺异':>5s} | {'\|a-b\|/b':>10s}"
             lines.append(header)
             lines.append(f"  {'-' * len(header)}")
 
@@ -783,36 +674,15 @@ class Verifier:
                     f"  {icon} {field:<12s} | {s['matched']:>6d} | {s['diff']:>4d} | "
                     f"{s['missing_in_original']:>5d} | {s['missing_in_new']:>5d} | "
                     f"{s.get('abnormal_missing_new', 0):>5d} | "
-                    f"{s['max_deviation_pct']:>7.2f}%"
+                    f"{s['max_deviation_pct']:>10.6f}"
                 )
                 limit = None if s["diff"] < 10 else 10
                 for sd in s["sample_diffs"][:limit]:
                     lines.append(
                         f"      → {sd['code']}: "
                         f"原表={sd['original']} 新表={sd['new']} "
-                        f"偏差={sd['deviation_pct']:.2f}%"
+                        f"a-b={sd.get('a-b','—')} |a-b|/b={sd.get('ratio', 0):.6f}"
                     )
 
         lines.append(f"{'=' * 80}")
         return "\n".join(lines)
-
-
-if __name__ == "__main__":
-    class PrintLogger:
-        def info(self, msg):
-            print(f"[INFO] {msg}")
-
-        def warning(self, msg):
-            print(f"[WARN] {msg}")
-
-        def error(self, msg):
-            print(f"[ERROR] {msg}")
-
-        def alert(self, msg):
-            print(f"[ALERT] {msg}")
-
-    v = Verifier(PrintLogger())
-    target = sys.argv[1] if len(sys.argv) > 1 else None
-    if target:
-        result = v.compare_all(target_date=target)
-        print(result["summary"])

@@ -5,14 +5,15 @@ in one RPC call. Only available on machines with cpp_py installed
 (e.g. db201, server202).
 """
 
-import os
 from typing import Optional
 
-from data_sources.modifier import czc_to_wind_code, pad_czce_code
+import os
+
+from data_sources.modifier import czc_to_wind_code
 
 # Wind RPC endpoint
-_RPC_HOST = "192.168.2.9"
-_RPC_PORT = 3801
+_RPC_HOST = os.environ["WIND_RPC_HOST"]
+_RPC_PORT = int(os.environ["WIND_RPC_PORT"])
 
 # Default fields matching t_futures_info.py
 _WSS_FIELDS = [
@@ -35,7 +36,7 @@ def _ensure_connected() -> bool:
 def fetch_wind_data(
     target_date: str,
     fields: Optional[list[str]] = None,
-) -> dict[str, dict[str, float]]:
+) -> list[dict]:
     """Fetch Wind WSS snapshot for all active futures contracts.
 
     Mirrors t_futures_info.py's contract selection logic:
@@ -91,7 +92,7 @@ def fetch_wind_data(
     else:
         options = f"tradeDate={target_date};futinstrtype=1;code_col=code"
 
-    ec, es, df = cpp_py.w.wss(codes_str, fields_str, options)
+    ec, _, df = cpp_py.w.wss(codes_str, fields_str, options)
     if ec != 0 or df is None or df.empty:
         return {}
 

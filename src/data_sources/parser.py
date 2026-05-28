@@ -12,7 +12,7 @@ Stat tracking: total_records, missing count per field, missing deviation.
 
 import csv
 import json
-import math
+import os
 import re
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -32,7 +32,7 @@ SHFE_PRODUCTS = {"CU","AL","ZN","PB","NI","SN","AU","AG","RB","WR",
 INE_PRODUCTS = {"SC","BC","LU","NR","EC"}
 
 
-RAW_DIR = Path("./data/raw")
+RAW_DIR = Path(os.environ.get("DATA_DIR", "./data")) / "raw"
 
 # Exchange code suffixes for DB
 SUFFIX_MAP = {

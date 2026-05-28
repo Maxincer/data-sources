@@ -10,8 +10,8 @@ Modifier: 原始数据清洗规则汇总。
 
 import math
 import re
-from datetime import date, datetime
-from typing import Optional
+from datetime import date
+from typing import Dict, List, Optional
 
 
 # ===================================================================
@@ -388,7 +388,6 @@ def fix_gfe_margin(records: list) -> list:
 
     逻辑：date T 的 margin = date T-1 结算参数表的原始值（投机买/卖字段）
     """
-    from collections import defaultdict
     return _fix_margin_inherit(
         records,
         exchange_suffix=".GFE",
@@ -585,6 +584,7 @@ def calc_shfe_ine_limit_prices(pre_settle: float, limit_pct_up: float,
 # ===================================================================
 
 import csv
+import os
 from pathlib import Path
 
 
@@ -600,7 +600,7 @@ def _pct_val(val: str) -> float | None:
         return None
 
 
-RAW_DATA_DIR = Path("./data/raw")
+RAW_DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")) / "raw"
 
 
 def fill_cffex_margin_from_history(records: list) -> list:
@@ -729,11 +729,7 @@ def _load_order_limits():
     global _ORDER_LIMITS
     if _ORDER_LIMITS:
         return
-    import csv, os
-    config_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "config", "order_limits.csv"
-    )
+    config_path = Path(os.environ.get("DATA_DIR", "./data")) / "order_limits.csv"
     with open(config_path, encoding="utf-8") as f:
         reader = csv.DictReader(l for l in f if not l.startswith("#"))
         for row in reader:

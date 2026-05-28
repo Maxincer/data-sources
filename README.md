@@ -1,5 +1,34 @@
 # data-sources — 期货数据管道
 
+---
+
+## 最近更新 (2026-05-29)
+
+### 架构
+- **DB 配置全部环境变量化**：无硬编码 IP/密码，`pipeline.sh` 是唯一配置入口
+- **双库支持**：主库 (`DB_*`) + 比对库 (`REF_DB_*`)，通过 `config_override` 切换
+- **数据/日志路径环境自适应**：`DATA_DIR`、`LOG_DIR` 根据 `DEV_MODE` 自动切换
+
+### 数据格式
+- **margin 统一为百分数**（Wind 口径）：12% → `12.0`，转换在 modifier 链末尾完成
+- **date 归一化**：parser 输出 `YYYYMMDD`，modifier 统一为 `YYYY-MM-DD`
+- **写入前先删**：`delete_rows()` 清空当日旧数据，避免 `ON DUPLICATE KEY UPDATE` 残留
+
+### 依赖
+- **移除 tushare**：`trade_dates.txt` 静态维护，每年手动追加次年交易日
+- **新增 mxz-utils / data-sources wheel**：`pip install --user` 安装，生产无需 `PYTHONPATH`
+
+### 部署
+- **离线包打包**：`tar.gz` 包含源码 + data + deploy/offline/，不含 libs/config/docs
+- **rutask 配置**：`/home/data_ops/rustask/rustask.local.json5`，task 名 `data_sources_pipeline`
+- **数据目录**：`/data2_backup/data_sources_data/`，日志目录 `/home/data_ops/log/`
+- **Playwright 浏览器**：`/home/data_ops/playwright-browsers/`
+
+### 代码质量
+- **清除死代码**：`compare_fields()`、`write_all()`、`_td()`、6 个重复 fetcher 方法
+- **pylint 零容忍**：W0611/W0612/W0613/E0102/E0602 全部清零
+- **生产统一**：不再依赖 pipx，全部使用 `python3 -m`
+
 ## 概述
 
 从 CFE（中金所）、CZC（郑商所）、DCE（大商所）、GFE（广期所）、INE（能源中心）、SHF（上期所）六家期货交易所官网，定时下载结算参数、日行情、交易参数等原始数据，解析后写入 MySQL 数据库 `t_futures_info_exchange`。
@@ -327,15 +356,15 @@ sed -i '/^20260131$/d' data/trade_dates.txt
 
 | 层级 | 方式 | 频率 |
 |------|------|------|
-| 自动 | tushare pro.trade_cal (SSE, 1990~当前+1年) | 每月 crontab 一次 |
-| 手动 | 临时调整时直接编辑 trade_dates.txt | 按需 |
+| 手动 | 直接编辑 trade_dates.txt | 按需 |
 
-tushare 的数据来自上交所官方 API，已覆盖年度常规休市和 COVID 等临时调整。每月一次 update() 按年分段请求（37 次 API），每次间隔 0.6s，远低于限流阈值。
+> **每年更新**：`trade_dates.txt` 由 tushare（已废弃）一次性生成后静态维护，
+> 每年末需手动追加下一年的交易日数据。
+> 上交所通常在每年 12 月发布次年交易日历，届时编辑 `data/trade_dates.txt` 追加即可。
 
 ### 接口
 
 ```python
-def update(data_dir: Optional[Path] = None) -> list[str]      # 拉取并持久化
 def load(force: bool = False) -> list[str]                     # 读文件（模块缓存，force=True 强制刷盘）
 def nearest(d) -> Optional[str]                                # 含自身，向前最近
 def prev_trading_date(d) -> Optional[str]                      # 不含自身，真正上一天

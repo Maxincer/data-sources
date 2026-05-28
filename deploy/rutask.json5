@@ -1,49 +1,29 @@
 // rutask 任务配置 — data-sources 期货数据管线
-// 部署位置: db201 / rutask Web UI > http://192.168.1.201:8877
+// 部署位置: db201 → /home/data_ops/rustask/rustask.local.json5
 // 格式: JSON5
-// 参考: docs/deployment-plan.md
 
 // ============================================================
-// 阶段一：写入过渡表 t_futures_info_exchange，Wind 继续写生产表
+// 阶段一：写入过渡表 t_futures_info_exchange
 // ============================================================
 
-data_sources_exchange: {
-  start_cron: "00 30 16 * * 1-5",
-  // 工作日 16:30 启动
-
-  cmd: "bash scripts/pipeline.sh",
-  cwd: "/home/data_ops/data-sources",
-
-  env: {
-    WRITER_HOST: "192.168.1.27",
-    WRITER_TABLE: "t_futures_info_exchange",
-    SMTP_PASSWORD: "***",
-  },
-
-  output: "/home/data_ops/data-sources/logs/pipeline-$datetime.log",
+data_sources_pipeline: {
+  start_cron: "00 40 16 * * 1-5",       // 工作日 16:40
+  cmd: "bash data-sources/scripts/pipeline.sh",
+  cwd: "/home/data_ops",
+  output: "/home/data_ops/log/pipeline-$datetime.log",
   safe_start: true,
-  life_time: 7200,
-  // 最大运行 2 小时
+  life_time: 7200,                        // 超时 2h
 }
 
 // ============================================================
-// 阶段二（切换后启用，注释掉阶段一和 update_if_exclude_wsi）
+// 阶段二（切换时启用，注释掉阶段一）
 // ============================================================
 /*
 data_sources: {
-  start_cron: "00 30 16 * * 1-5",
-
-  cmd: "bash scripts/pipeline.sh",
-  cwd: "/home/data_ops/data-sources",
-
-  env: {
-    WRITER_HOST: "192.168.1.27",
-    WRITER_TABLE: "t_futures_info",
-    SKIP_TABLE_COMPARE: "1",
-    SMTP_PASSWORD: "***",
-  },
-
-  output: "/home/data_ops/data-sources/logs/pipeline-$datetime.log",
+  start_cron: "00 40 16 * * 1-5",
+  cmd: "bash data-sources/scripts/pipeline.sh",
+  cwd: "/home/data_ops",
+  output: "/home/data_ops/log/pipeline-$datetime.log",
   safe_start: true,
   life_time: 7200,
 }

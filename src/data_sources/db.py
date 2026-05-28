@@ -11,32 +11,24 @@ phases without modifying global state).
 import os
 import pymysql
 
-DB_CONFIG = {
-    "host": os.environ.get("DB_HOST", "192.168.1.202"),
-    "user": os.environ.get("DB_USER", "root"),
-    "password": os.environ.get("DB_PASSWORD", ""),
-    "database": os.environ.get("DB_DATABASE", "future_cn"),
-    "charset": "utf8mb4",
-}
-
-def _table_name(config_override: dict | None = None) -> str:
-    """Return table name from config_override. Required via --table arg."""
-    if config_override and "table" in config_override:
-        return config_override["table"]
-    raise ValueError("table name required (pass --table to writer)")
-
-
-def _database_name(config_override: dict | None = None) -> str:
-    cfg = resolve_config(config_override)
-    return cfg.get("database", "future_cn")
-
-
-# ---- Helpers ----
+# 所有 DB 连接参数通过环境变量传入，pipeline.sh 是唯一配置入口。
+# 未设置时直接报错，不做静默回退。
 
 
 def resolve_config(config_override: dict | None = None) -> dict:
-    """Return merged DB config, overriding defaults with provided values."""
-    cfg = dict(DB_CONFIG)
+    """Return DB connection config, reading strictly from env vars.
+
+    Required env vars: DB_HOST, DB_USER, DB_DATABASE.
+    Optional: DB_PASSWORD (defaults to empty string).
+    Config dict may contain 'table' key (stripped before pymysql.connect).
+    """
+    cfg = {
+        "host":     os.environ["DB_HOST"],
+        "user":     os.environ["DB_USER"],
+        "password": os.environ.get("DB_PASSWORD", ""),
+        "database": os.environ["DB_DATABASE"],
+        "charset":  "utf8mb4",
+    }
     if config_override:
         for k, v in config_override.items():
             if v is not None and k not in ("table",):
@@ -45,34 +37,30 @@ def resolve_config(config_override: dict | None = None) -> dict:
 
 
 def get_connection(config_override: dict | None = None):
-    """Return a pymysql connection."""
+    """Return a pymysql connection. Strips 'table' before connecting."""
     cfg = resolve_config(config_override)
     return pymysql.connect(**cfg)
 
 
-    cfg = resolve_config(config_override)
-    return cfg.get("database", "future_cn")
-
-
-    """Return a pymysql connection."""
-    cfg = resolve_config(config_override)
-    return pymysql.connect(**cfg)
-
-
-def fetch_table(table: str, date: str) -> list[dict]:
+def fetch_table(table: str, date: str, config_override: dict | None = None) -> list[dict]:
     """Read all rows from a MySQL table for a given date.
 
-    Returns list of records: [{"code": "...", "date": "YYYY-MM-DD",
-                                "open": 105720.0, ...}, ...]
-    Dates are converted to YYYYMMDD strings. Numeric fields become floats.
+    Args:
+        table: MySQL table name (e.g. "t_futures_info_exchange")
+        date: YYYYMMDD
+        config_override: optional dict to override host/user/password
+
+    Returns:
+        list of records [{code, date, open, high, ...}]
     """
-    conn = get_connection()
+    conn = get_connection(config_override)
     conn.cursorclass = pymysql.cursors.DictCursor
+    database = resolve_config(config_override)["database"]
     try:
         dt = f"{date[:4]}-{date[4:6]}-{date[6:8]}"
         with conn.cursor() as cur:
             cur.execute(
-                f"SELECT * FROM `future_cn`.{table} WHERE date = %s",
+                f"SELECT * FROM `{database}`.`{table}` WHERE date = %s",
                 (dt,),
             )
             rows = cur.fetchall()
@@ -96,64 +84,45 @@ def fetch_table(table: str, date: str) -> list[dict]:
         conn.close()
 
 
-# ---- DDL ----
+# 已知 DB 列白名单：只 INSERT 表中实际存在的列，防止 parser 残留内部字段导致报错
+_DB_COLS = [
+    "code", "date", "open", "high", "low", "close",
+    "volume", "amt", "oi", "settle", "maxup", "maxdown",
+    "if_basis", "long_margin", "short_margin", "minoq", "maxoq",
+]
 
 
-CREATE_SQL_TPL = """\
-CREATE TABLE IF NOT EXISTS `{database}`.`{table}` (
-    `code`    VARCHAR(16)  NOT NULL,
-    `date`    DATE         NOT NULL,
-    `open`    DOUBLE       DEFAULT NULL,
-    `high`    DOUBLE       DEFAULT NULL,
-    `low`     DOUBLE       DEFAULT NULL,
-    `close`   DOUBLE       DEFAULT NULL,
-    `volume`  DOUBLE       DEFAULT NULL,
-    `amt`     DOUBLE       DEFAULT NULL,
-    `oi`      DOUBLE       DEFAULT NULL,
-    `settle`  DOUBLE       DEFAULT NULL,
-    `maxup`   DOUBLE       DEFAULT NULL,
-    `maxdown` DOUBLE       DEFAULT NULL,
-    `if_basis` DOUBLE      DEFAULT NULL,
-    `long_margin` DOUBLE   DEFAULT NULL,
-    `short_margin` DOUBLE  DEFAULT NULL,
-    `minoq`   DOUBLE       DEFAULT NULL,
-    `maxoq`   DOUBLE       DEFAULT NULL,
-    `last_trade_date` DATE DEFAULT NULL,
-    `source`  VARCHAR(16)  DEFAULT NULL,
-    PRIMARY KEY (`code`, `date`),
-    INDEX `idx_date` (`date`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-"""
-
-
-def ensure_table_exists(config_override: dict | None = None):
-    """Create target table if it doesn't already exist."""
+def delete_rows(date: str, table: str,
+                  config_override: dict | None = None) -> int:
+    """Delete all records for a given date from a table."""
     conn = get_connection(config_override)
-    table = _table_name(config_override)
-    database = _database_name(config_override)
-    sql = CREATE_SQL_TPL.format(database=database, table=table)
+    database = resolve_config(config_override)["database"]
+    dt = date if "-" in date else f"{date[:4]}-{date[4:6]}-{date[6:8]}"
     try:
         with conn.cursor() as cur:
-            cur.execute(sql)
+            cur.execute(
+                f"DELETE FROM `{database}`.`{table}` WHERE date = %s",
+                (dt,),
+            )
         conn.commit()
+        return cur.rowcount
     finally:
         conn.close()
 
 
-def upsert_rows(records: list[dict], config_override: dict | None = None):
+def upsert_rows(records: list[dict], table: str,
+                config_override: dict | None = None):
     """INSERT ... ON DUPLICATE KEY UPDATE for a batch of records."""
     if not records:
         return 0
 
     conn = get_connection(config_override)
-    table = _table_name(config_override)
-    database = _database_name(config_override)
+    database = resolve_config(config_override)["database"]
 
-    col_names = list(records[0].keys())
-    col_str = ", ".join(f"`{c}`" for c in col_names)
-    placeholder_str = ", ".join(["%s"] * len(col_names))
+    col_str = ", ".join(f"`{c}`" for c in _DB_COLS)
+    placeholder_str = ", ".join(["%s"] * len(_DB_COLS))
     update_str = ", ".join(
-        f"`{c}` = VALUES(`{c}`)" for c in col_names
+        f"`{c}` = VALUES(`{c}`)" for c in _DB_COLS
         if c not in ("code", "date")
     )
 
@@ -167,7 +136,8 @@ def upsert_rows(records: list[dict], config_override: dict | None = None):
         with conn.cursor() as cur:
             affected = 0
             for rec in records:
-                values = [rec.get(c) for c in col_names]
+                # 列白名单过滤：只 INSERT 已知列，防止 parser 残留内部字段导致报错
+                values = [rec.get(c) for c in _DB_COLS]
                 cur.execute(sql, values)
                 affected += cur.rowcount
         conn.commit()
