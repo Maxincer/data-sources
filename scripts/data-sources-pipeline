@@ -1,20 +1,28 @@
 #!/usr/bin/env bash
 # Data pipeline – works in both dev (DEV_MODE=1) and prod.
 # Usage:
-#  Production:                 bash data-sources/scripts/pipeline.sh [TRADE_DATE]
-#  Development:                DEV_MODE=1 bash scripts/pipeline.sh [TRADE_DATE]
+#  Production:                 data-sources-pipeline [TRADE_DATE]
+#  Development:                DEV_MODE=1 bash scripts/data-sources-pipeline [TRADE_DATE]
 #
-#  Rutask: cwd=/home/data_ops, cmd=bash data-sources/scripts/pipeline.sh
+#  Rutask: cwd=/home/data_ops, cmd=data-sources-pipeline
 #  Cron:   00 40 16 * * 1-5
-
-# Resolve project root (works if script is in <project>/scripts/)
-cd "$(dirname "$0")/.." || exit 1
 
 TRADE_DATE="${1:-$(date +%Y%m%d)}"
 
+# ---- 阶段配置（必须在 if/else 之前，否则 RUN_WRITER 拿不到）----
+WRITER_TABLE="t_futures_info_exchange"
+# WRITER_TABLE="t_futures_info"  # 阶段二
+WRITER_OPTS="--table $WRITER_TABLE"
+
+# 阶段二需设 SKIP_TABLE_COMPARE=1
+# SKIP_TABLE_COMPARE=1
+REPORTER_OPTS=""
+[ -n "${SKIP_TABLE_COMPARE:-}" ] && REPORTER_OPTS="--skip-table-compare"
+
 # ---- 环境自适应 ----
 if [ -n "${DEV_MODE}" ]; then
-    # 开发模式
+    # 开发模式 - cwd 必须为项目根目录（DATA_DIR/LOG_DIR/PYTHONPATH 均依赖相对路径）
+    cd "$(dirname "$0")/.." || exit 1
     export DB_HOST="192.168.1.202"
     export DB_USER="root"
     export DB_PASSWORD="root0808"
@@ -24,6 +32,7 @@ if [ -n "${DEV_MODE}" ]; then
     export REF_DB_HOST="192.168.1.27"
     export REF_DB_USER="tools"
     export REF_DB_PASSWORD="tools0512"
+    export REF_DB_DATABASE="future_cn"
     PIP="$(dirname "$0")/../.venv/bin/python3"
     export PYTHONPATH="${PWD}/src:${PWD}/libs/mxz-utils/src"
     export DATA_DIR="./data"
@@ -41,7 +50,11 @@ else
     export DATA_DIR="/data2_backup/data_sources_data"
     export LOG_DIR="/home/data_ops/log"
     export PLAYWRIGHT_BROWSERS_PATH="/home/data_ops/playwright-browsers"
-    # 生产不设 REF_DB_*，比对走主库
+    # 比对走主库（阶段一：exchange vs wind 都在 1.27）
+    export REF_DB_HOST="192.168.1.27"
+    export REF_DB_USER="tools"
+    export REF_DB_PASSWORD="tools0512"
+    export REF_DB_DATABASE="future_cn"
     RUN_FETCHER="python3 -m data_sources.fetcher run ${TRADE_DATE}"
     RUN_WRITER="python3 -m data_sources.writer --date ${TRADE_DATE} ${WRITER_OPTS}"
     RUN_REPORTER="python3 -m data_sources.reporter ${TRADE_DATE}"
@@ -55,7 +68,8 @@ if [ -f "${TRADE_DATES_FILE}" ]; then
         exit 0
     fi
 else
-    echo "[$(date '+%F %T')] ⚠ ${TRADE_DATES_FILE} 不存在，强制运行"
+    echo "[$(date '+%F %T')] ERROR: ${TRADE_DATES_FILE} 不存在，无法判定交易日"
+    exit 1
 fi
 
 # ---- 时间门禁 ----
@@ -65,19 +79,8 @@ if [ "$CURRENT_HM" -lt 1640 ]; then
     exit 0
 fi
 
-# ---- 阶段配置（阶段一切换阶段二时修改此处）----
-WRITER_TABLE="t_futures_info_exchange"
-# WRITER_TABLE="t_futures_info"  # 阶段二
-WRITER_OPTS="--table $WRITER_TABLE"
-
-# 阶段二需设 SKIP_TABLE_COMPARE=1
-# SKIP_TABLE_COMPARE=1
-REPORTER_OPTS=""
-[ -n "${SKIP_TABLE_COMPARE:-}" ] && REPORTER_OPTS="--skip-table-compare"
-
 # ---- 密码与收件人 ----
-SMTP_PASSWORD="NBnDH84qZHZWFrTC"
-export SMTP_PASSWORD
+export SMTP_PASSWORD="NBnDH84qZHZWFrTC"
 export FEISHU_WEBHOOK="https://open.feishu.cn/open-apis/bot/v2/hook/7f1c49ef-6e6b-4c19-8152-8e25dfb8d688"
 export SMTP_HOST="smtp.exmail.qq.com"
 export SMTP_PORT="465"

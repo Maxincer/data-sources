@@ -55,7 +55,7 @@ writer ──► t_futures_info_exchange (ours)   t_futures_info (Wind)
 | Chromium 系统 .deb | `deploy/offline/chromium-deps/` | 18M |
 | pip 依赖 .whl | `deploy/offline/pip-deps/` | 80M |
 | 部署脚本 | `scripts/deploy.sh` | — |
-| 流水线脚本 | `scripts/pipeline.sh` | — |
+| 流水线脚本 | `scripts/data-sources-pipeline` | — |
 | 项目源码 | `src/` | — |
 
 ### 2.2 待执行代码改动
@@ -64,7 +64,7 @@ writer ──► t_futures_info_exchange (ours)   t_futures_info (Wind)
 
 1. **`src/data_sources/db.py`**：默认 host 改为 `192.168.1.27`，user → `tools`，password → `tools0512`
 
-2. **`scripts/pipeline.sh`**：时间门禁 16:27 → 16:45，删除 16:40 等待逻辑
+2. **`scripts/data-sources-pipeline`**：时间门禁 16:27 → 16:45，删除 16:40 等待逻辑
 
 ### 2.3 db201 环境要求
 
@@ -187,9 +187,9 @@ reporter --help
 ```json5
 data_sources_exchange: {
   start_cron: "00 45 16 * * 1-5",
-  cmd: "bash scripts/pipeline.sh",
-  cwd: "/home/data_ops/data-sources",
-  output: "/home/data_ops/data-sources/log/$datetime.log",
+  cmd: "data-sources-pipeline",
+  cwd: "/home/data_ops",
+  output: "/home/data_ops/log/$datetime.log",
   safe_start: true,
   life_time: 7200,
 }
@@ -200,13 +200,13 @@ data_sources_exchange: {
 ### 4.4 手动首跑测试
 
 ```bash
-cd ~/data-sources
+cd /home/data_ops
 
 # 用某已知交易日测试（例如最近一个交易日）
-bash scripts/pipeline.sh 20260523
+data-sources-pipeline 20260523
 
 # 检查日志
-tail -50 log/$(date +%Y%m%d)*.log
+tail -50 /home/data_ops/log/$(date +%Y%m%d)*.log
 ```
 
 ---
@@ -269,7 +269,7 @@ SELECT 'wind' as src, COUNT(*) FROM t_futures_info WHERE date='20260523';
 curl -s http://192.168.1.201:8877 | grep data_sources
 
 # 2. 当天日志
-tail -30 ~/data-sources/log/$(date +%Y%m%d)*.log
+tail -30 /home/data_ops/log/$(date +%Y%m%d)*.log
 
 # 3. 飞书报告是否有异常标记
 ```
@@ -277,7 +277,7 @@ tail -30 ~/data-sources/log/$(date +%Y%m%d)*.log
 ### 6.2 日志位置
 
 ```
-/home/data_ops/data-sources/log/
+/home/data_ops/log/
 ├── 20260527.log
 ├── 20260528.log
 └── ...

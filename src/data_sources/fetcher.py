@@ -27,8 +27,9 @@ from data_sources.configs import build_task_configs, DCE_BASE_URL
 RAW_DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")) / "raw"
 RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
 METADATA_FILE = RAW_DATA_DIR / ".metadata.jsonl"
-DCE_API_KEY = os.environ["DCE_API_KEY"]
-DCE_API_SECRET = os.environ["DCE_API_SECRET"]
+def _dce_credentials():
+    """Return (key, secret) from env, failing hard if unset."""
+    return os.environ["DCE_API_KEY"], os.environ["DCE_API_SECRET"]
 
 
 # ---------------------------------------------------------------------------
@@ -320,7 +321,7 @@ class Fetcher:
             return {"success": False, "error": "Token acquisition failed"}
         try:
             headers = {
-                "apikey": DCE_API_KEY,
+                "apikey": _dce_credentials()[0],
                 "Authorization": f"Bearer {token}",
             }
             payload = {
@@ -372,7 +373,7 @@ class Fetcher:
             return {"success": False, "error": "Token acquisition failed"}
         try:
             headers = {
-                "apikey": DCE_API_KEY,
+                "apikey": _dce_credentials()[0],
                 "Authorization": f"Bearer {token}",
             }
             payload = {
@@ -597,8 +598,8 @@ class Fetcher:
         """Retrieve a valid Bearer token for the DCE API."""
         try:
             url = f"{DCE_BASE_URL}/dceapi/cms/auth/accessToken"
-            headers = {"apikey": DCE_API_KEY}
-            payload = {"secret": DCE_API_SECRET}
+            headers = {"apikey": _dce_credentials()[0]}
+            payload = {"secret": _dce_credentials()[1]}
             resp = requests.post(
                 url, headers=headers, json=payload, timeout=15
             )
@@ -719,7 +720,7 @@ class Fetcher:
             return {"success": False, "error": "Token acquisition failed"}
         try:
             headers = {
-                "apikey": DCE_API_KEY,
+                "apikey": _dce_credentials()[0],
                 "Authorization": f"Bearer {token}",
             }
             payload = {

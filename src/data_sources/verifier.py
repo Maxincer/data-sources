@@ -655,7 +655,8 @@ class Verifier:
             lines.append(f"  ── {ex} ──")
 
             # Header row
-            header = f"  {'字段':<14s} | {'匹配':>6s} | {'差异':>4s} | {'原表缺':>5s} | {'新表缺':>5s} | {'缺异':>5s} | {'\|a-b\|/b':>10s}"
+            ab_label = "|a-b|/b"
+            header = f"  {'字段':<14s} | {'匹配':>6s} | {'差异':>4s} | {'原表缺':>5s} | {'新表缺':>5s} | {'缺异':>5s} | {ab_label:>10s}"
             lines.append(header)
             lines.append(f"  {'-' * len(header)}")
 

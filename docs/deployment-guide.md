@@ -1,6 +1,8 @@
 # data-sources 阶段一部署手册
 
+> 入库`future_cn`.`t_futures_info_exchange`
 > 面向部署人员（db201: `data_ops`）
+> 部署后不留项目文件夹，所有运行时文件在目标路径中
 
 ---
 
@@ -10,12 +12,13 @@
 |------|-----|
 | 服务器 | `192.168.1.201` |
 | 用户 | `data_ops` |
-| 项目路径 | `/home/data_ops/data-sources/` |
 | 数据目录 | `/data2_backup/data_sources_data/` |
 | 日志目录 | `/home/data_ops/log/` |
 | Python | 系统 3.10+ |
 | MySQL | `192.168.1.27`（`tools` / `future_cn`） |
 | rutask 配置 | `/home/data_ops/rustask/rustask.local.json5` |
+| 可执行文件 | `~/.local/bin/data-sources-pipeline`（pip 安装） |
+| site-packages | `~/.local/lib/python3.10/site-packages/data_sources/` |
 
 ---
 
@@ -24,11 +27,11 @@
 ### 2.1 下载与解压
 
 ```bash
-RELEASE="20260528-f3b9e79"   # 替换为实际版本
-wget -O /tmp/${RELEASE}.tar.gz \
-  http://releases.corp.wendao.fund/data-sources/${RELEASE}.tar.gz
+RELEASE="20260529-f3b9e79"   # 替换为实际版本
+wget -O /tmp/${RELEASE}.tar.gz http://releases.corp.wendao.fund/data-sources/${RELEASE}.tar.gz
 
-cd /home/data_ops
+mkdir -p /tmp/data-sources
+cd /tmp/data-sources
 tar -xzf /tmp/${RELEASE}.tar.gz
 ```
 
@@ -38,22 +41,19 @@ tar -xzf /tmp/${RELEASE}.tar.gz
 
 ```bash
 mkdir -p /data2_backup/data_sources_data
-cp -rn data-sources/data/* /data2_backup/data_sources_data/
+cp -rn /tmp/data-sources/data/* /data2_backup/data_sources_data/
 ```
 
-### 2.3 首次部署：系统依赖
+### 2.3 首次部署：Chromium 系统依赖
 
-> 仅首次部署执行。Chromium 运行所需的系统库。
+> 仅首次部署执行。检查依赖是否已安装，缺了再装。
 
 ```bash
-# Chromium 依赖（约 77 个 .deb）
-sudo dpkg -i data-sources/deploy/offline/chromium-deps/*.deb 2>/dev/null || {
-    sudo apt install -f -y
-    sudo dpkg -i data-sources/deploy/offline/chromium-deps/*.deb
-}
+# 修复依赖
+sudo apt install -f -y
 
-# 额外系统库
-sudo dpkg -i data-sources/deploy/offline/sys-libs/*.deb 2>/dev/null || true
+# 安装 chromium 系统库（apt 自动跳过已安装、不会降级）
+sudo apt install -y /tmp/data-sources/deploy/offline/chromium-deps/*.deb
 ```
 
 ### 2.4 首次部署：Playwright 浏览器
@@ -62,8 +62,8 @@ sudo dpkg -i data-sources/deploy/offline/sys-libs/*.deb 2>/dev/null || true
 
 ```bash
 mkdir -p /home/data_ops/playwright-browsers
-cp -rn data-sources/deploy/offline/playwright/chromium-1208 /home/data_ops/playwright-browsers/
-cp -rn data-sources/deploy/offline/playwright/chromium_headless_shell-1208 /home/data_ops/playwright-browsers/
+cp -rn /tmp/data-sources/deploy/offline/playwright/chromium-1208 /home/data_ops/playwright-browsers/
+cp -rn /tmp/data-sources/deploy/offline/playwright/chromium_headless_shell-1208 /home/data_ops/playwright-browsers/
 ```
 
 ### 2.5 安装 Python 依赖
@@ -71,8 +71,7 @@ cp -rn data-sources/deploy/offline/playwright/chromium_headless_shell-1208 /home
 > 每次更新都需执行。
 
 ```bash
-cd data-sources
-pip3 install --user --no-index --find-links=deploy/offline/pip-deps -r requirements.txt
+pip3 install --user --no-index --find-links=/tmp/data-sources/deploy/offline/pip-deps data_sources mxz_utils pymysql playwright fire pyee greenlet typing_extensions termcolor requests beautifulsoup4 soupsieve certifi charset_normalizer idna urllib3
 ```
 
 ### 2.6 首次部署：配置 rutask
@@ -83,18 +82,23 @@ pip3 install --user --no-index --find-links=deploy/offline/pip-deps -r requireme
 
 ```json5
 data_sources_pipeline: {
-  start_cron: "00 40 16 * * 1-5",       // 工作日 16:40
-  cmd: "bash data-sources/scripts/pipeline.sh",
-  cwd: "/home/data_ops",
-  output: "/home/data_ops/log/pipeline-$datetime.log",
-  safe_start: true,
-  life_time: 7200,                        // 超时 2h
+  "cmd": "data-sources-pipeline",
+  "hide_log": false,  
+  "output": "/home/data_ops/log/DataSourcesPipeline.$date.log",
+  "safe_start": true,
+  "start_cron": "00 40 16 * * 1-5"
 }
 ```
 
-rutask 自动监听配置文件变更，无需手动重启。
+配置后 reload 生效
 
-> `pipeline.sh` 根据是否设置 `DEV_MODE` 自动选择 DB 连接参数，无需 rutask 额外传 env。
+```bash
+curl http://192.168.1.201:8877/reload
+# 或者
+rustask --sock cmd-rustask.sock reload
+```
+
+> 无需 rutask 额外传 env：`data-sources-pipeline` 根据是否设置 `DEV_MODE` 自动选择 DB 连接参数，
 
 ### 2.7 验证
 
@@ -107,17 +111,24 @@ python3 -c "import data_sources"     # 无报错
 ```
 
 ```sql
+-- 设定测试日期
+SET @d = '2026-05-27';
+
 -- 行数（预期 ~870 条/日）
-SELECT COUNT(*) FROM t_futures_info_exchange WHERE date = '20260527';
+SELECT COUNT(*) FROM t_futures_info_exchange WHERE date = @d;
 
 -- 交易所覆盖（预期 6 家）
 SELECT SUBSTRING_INDEX(code, '.', -1) AS ex, COUNT(*)
-FROM t_futures_info_exchange WHERE date = '20260527'
+FROM t_futures_info_exchange WHERE date = @d
 GROUP BY ex;
+```
 
--- margin 格式（百分数，12.0 = 12%）
-SELECT ROUND(MIN(long_margin),2), ROUND(MAX(long_margin),2)
-FROM t_futures_info_exchange WHERE date = '20260527';
+### 2.8 清理
+
+> 部署完成后执行。
+
+```bash
+rm -rf /tmp/data-sources /tmp/${RELEASE}.tar.gz
 ```
 
 ---
@@ -126,22 +137,45 @@ FROM t_futures_info_exchange WHERE date = '20260527';
 
 ### 3.1 单日测试
 
+> 推荐方式：直接编辑 `~/.local/bin/data-sources-pipeline` 调试，再运行。
+
 ```bash
-cd ~/data-sources
+# 调试 pipeline（如注释掉 fetcher/reporter，或调整 WRITER_TABLE）
+vi ~/.local/bin/data-sources-pipeline
 
-# 全流程（需先确认 raw data 已就绪）
-bash scripts/pipeline.sh 20260527
-
-# 仅写入（跳过下载和报告）
-python3 -m data_sources.writer --date 20260527 --table t_futures_info_exchange
+# 全流程一键
+data-sources-pipeline 20260529
 ```
+
+> 如需单步调试（env 未自动载入时先手动设）：
+> ```bash
+> export DB_HOST="192.168.1.27" DB_USER="tools" ...  # 见 data-sources-pipeline 内 prod block
+> python3 -m data_sources.fetcher run 20260529
+> ```
 
 ### 3.2 回滚
 
-```sql
-DELETE FROM t_futures_info WHERE date = '20260527';
--- 联系 Wind 管理员重跑 update_if_exclude_wsi.sh
+```bash
+# 连接 MySQL
+mysql -h 192.168.1.27 -u tools -ptools0512 future_cn
 ```
+
+```sql
+-- 1. 确认待删除数据
+SET @d = '2026-05-27';
+SELECT date, COUNT(*) AS cnt
+FROM t_futures_info_exchange
+WHERE date = @d
+GROUP BY date;
+
+-- 2. 确认无误后删除
+DELETE FROM t_futures_info_exchange WHERE date = @d;
+
+-- 3. 验证已清空（应为 0）
+SELECT COUNT(*) FROM t_futures_info_exchange WHERE date = @d;
+```
+
+> 回滚后重跑：`data-sources-pipeline $TRADE_DATE`
 
 ---
 
@@ -149,8 +183,8 @@ DELETE FROM t_futures_info WHERE date = '20260527';
 
 ```
 /home/data_ops/log/
-├── pipeline-20260527.log       # 每日全流程（rutask 重定向）
-├── Fetcher.20260527.log        # 下载
-├── Writer.20260527.log         # 解析/写入
-└── Reporter.20260527.log       # 报告 / 邮件
+├── DataSourcesPipeline.$TRADE_DATE.log       # 每日全流程（rutask 重定向）
+├── Fetcher.$TRADE_DATE.log        # 下载
+├── Writer.$TRADE_DATE.log         # 解析/写入
+└── Reporter.$TRADE_DATE.log       # 报告 / 邮件
 ```

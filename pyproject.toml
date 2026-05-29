@@ -13,8 +13,12 @@ dependencies = [
     "pymysql~=1.1.0",
     "playwright~=1.58.0",
     "beautifulsoup4~=4.14.0",
+    "mxz-utils~=0.1.0",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["data_sources*"]
+
+[tool.setuptools]
+script-files = ["scripts/data-sources-pipeline"]

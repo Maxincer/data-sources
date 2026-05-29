@@ -11,9 +11,9 @@ import os
 
 from data_sources.modifier import czc_to_wind_code
 
-# Wind RPC endpoint
-_RPC_HOST = os.environ["WIND_RPC_HOST"]
-_RPC_PORT = int(os.environ["WIND_RPC_PORT"])
+# Wind RPC host/port — read from env at call time (not import time)
+def _rpc_endpoint():
+    return os.environ["WIND_RPC_HOST"], int(os.environ["WIND_RPC_PORT"])
 
 # Default fields matching t_futures_info.py
 _WSS_FIELDS = [
@@ -27,7 +27,8 @@ def _ensure_connected() -> bool:
     """Set Wind RPC server and check connectivity."""
     try:
         import cpp_py
-        cpp_py.w.set_server(f"{_RPC_HOST}:{_RPC_PORT}")
+        host, port = _rpc_endpoint()
+        cpp_py.w.set_server(f"{host}:{port}")
         return cpp_py.w.is_connected()
     except Exception:
         return False

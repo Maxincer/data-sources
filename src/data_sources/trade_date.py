@@ -17,9 +17,10 @@ from bisect import bisect_left, bisect_right
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+import os
 
 
-_DEFAULT_DATA_DIR = Path("./data")
+DATA_DIR = Path(os.environ["DATA_DIR"])
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +40,7 @@ def load(force: bool = False) -> list[str]:
         if cache is not None:
             return cache
 
-    filepath = _DEFAULT_DATA_DIR / "trade_dates.txt"
+    filepath = DATA_DIR / "trade_dates.txt"
     if not filepath.exists():
         load._cache = []
         return []
