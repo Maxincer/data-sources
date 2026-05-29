@@ -27,7 +27,7 @@
 ### 2.1 下载与解压
 
 ```bash
-RELEASE="20260529-f3b9e79"   # 替换为实际版本
+RELEASE="20260529-9602a79"   # 替换为实际版本
 wget -O /tmp/${RELEASE}.tar.gz http://releases.corp.wendao.fund/data-sources/${RELEASE}.tar.gz
 
 mkdir -p /tmp/data-sources
@@ -82,9 +82,9 @@ pip3 install --user --no-index --find-links=/tmp/data-sources/deploy/offline/pip
 
 ```json5
 data_sources_pipeline: {
-  "cmd": "data-sources-pipeline",
+  "cmd": "/home/data_ops/.local/bin/data-sources-pipeline",
   "hide_log": false,  
-  "output": "/home/data_ops/log/DataSourcesPipeline.$date.log",
+  "output": ">>/home/data_ops/log/DataSourcesPipeline.$date.log",
   "safe_start": true,
   "start_cron": "00 40 16 * * 1-5"
 }
