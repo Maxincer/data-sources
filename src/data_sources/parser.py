@@ -1349,5 +1349,6 @@ def parse_announcement_fields(
             "field": field,
             "value": int(val),
             "effective_date": str(item.get("effective_date", publish_date)),
+            "evidence": str(item.get("evidence", "")),
         })
     return results

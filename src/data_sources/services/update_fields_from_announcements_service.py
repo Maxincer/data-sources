@@ -42,7 +42,7 @@ logger = get_logger(
 HEADER = [
     "announcement_id", "publish_date", "exchange",
     "product_code", "security_id", "field", "value",
-    "effective_date", "announcement_title",
+    "effective_date", "announcement_title", "evidence",
 ]
 
 # 附件下载目录
@@ -171,6 +171,7 @@ def main():
                             "value": str(item["value"]),
                             "effective_date": item["effective_date"],
                             "announcement_title": entry.get("title", ""),
+                            "evidence": item.get("evidence", ""),
                         })
                         parsed[0] += 1
                     logger.info("  + [%s] %s: %s 条",
