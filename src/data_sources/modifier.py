@@ -725,28 +725,45 @@ _ORDER_LIMITS: dict = {}
 
 
 def _load_order_limits():
-    """Lazy-load order_limits.csv."""
+    """Load fields from fields_from_announcements.csv (replaces order_limits.csv)."""
     global _ORDER_LIMITS
     if _ORDER_LIMITS:
         return
-    config_path = Path(os.environ.get("DATA_DIR", "./data")) / "order_limits.csv"
+    config_path = Path(os.environ.get("DATA_DIR", "./data")) / "fields_from_announcements.csv"
+    if not config_path.exists():
+        return
     with open(config_path, encoding="utf-8") as f:
-        reader = csv.DictReader(l for l in f if not l.startswith("#"))
+        reader = csv.DictReader(f)
         for row in reader:
             ex = row.get("exchange", "").strip()
-            vid = row.get("variety_id", "").strip().upper()
-            if not ex or not vid:
+            pc = row.get("product_code", "").strip().upper()
+            field = row.get("field", "").strip()
+            val = row.get("value", "").strip()
+            sid = row.get("security_id", "").strip()
+            if not ex or not pc or not field or not val:
                 continue
-            entry = {}
-            for field in ("minoq", "maxoq_limit"):
-                val = row.get(field, "").strip()
-                if val:
-                    try:
-                        entry[field] = int(val)
-                    except ValueError:
-                        pass
-            if entry:
-                _ORDER_LIMITS[(ex, vid)] = entry
+            try:
+                val = int(val)
+            except ValueError:
+                continue
+            # 跳过合约级条目（product_code 含数字，如 IM2208）
+            if any(c.isdigit() for c in pc):
+                continue
+            # 仅取品种级 (security_id=ALL) 或通用调整
+            key = (ex, pc)
+            if key not in _ORDER_LIMITS:
+                _ORDER_LIMITS[key] = {}
+            if field == "maxoq":
+                _ORDER_LIMITS[key]["maxoq_limit"] = val
+            elif field == "minoq":
+                _ORDER_LIMITS[key]["minoq"] = val
+    # 同时存去连字符键（DCE -F 月均价）
+    extra = {}
+    for (ex, vid), entry in _ORDER_LIMITS.items():
+        stripped = vid.replace("-", "")
+        if stripped != vid:
+            extra[(ex, stripped)] = entry
+    _ORDER_LIMITS.update(extra)
 
 
 def inject_order_limits(records: list) -> list:
