@@ -16,6 +16,8 @@ import csv
 import json
 import os
 import sys
+import asyncio
+from asyncio import Semaphore
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -90,7 +92,6 @@ def main():
 
     # 1. 加载已有 CSV
     seen_ids = load_existing()
-    new_rows: list[dict] = []
 
     # 2. 加载 metadata
     if not META_FILE.exists():
@@ -122,50 +123,68 @@ def main():
         logger.info("无新公告，退出")
         return
 
-    # 4. 逐条解析
+    # 4. 异步并发解析
     dry_run = "--dry-run" in sys.argv
-    parsed = 0
-    skipped = 0
+    semaphore = int(os.environ.get("LLM_CONCURRENCY", "10"))
+    sem = Semaphore(semaphore)
+    logger.info("并发度: %s", semaphore)
 
-    for aid, entry in candidates:
+    new_rows: list[dict] = []
+    parsed = [0]
+    skipped = [0]
+    lock = asyncio.Lock()
+
+    async def process_one(aid, entry):
         sf = entry.get("source_file", "")
-        html = Path(sf).read_text(encoding="utf-8", errors="replace")
-        exchange = entry.get("exchange", "")
-        title = entry.get("title", "")
-        pub_date = entry.get("pub_date", "")
-        page_url = entry.get("url", "")
-        logger.info("解析 [%s] %s — %s", exchange, aid, title[:50])
+        loop = asyncio.get_running_loop()
 
-        items = parse_announcement_fields(
-            html=html,
-            exchange=exchange,
-            title=title,
-            publish_date=pub_date,
-            page_url=page_url,
-            attachment_dir=ATTACHMENT_DIR,
-        )
+        async with sem:
+            try:
+                html = await loop.run_in_executor(
+                    None, lambda: Path(sf).read_text(encoding="utf-8", errors="replace"))
+                items = await loop.run_in_executor(
+                    None,
+                    lambda: parse_announcement_fields(
+                        html=html,
+                        exchange=entry.get("exchange", ""),
+                        title=entry.get("title", ""),
+                        publish_date=entry.get("pub_date", ""),
+                        page_url=entry.get("url", ""),
+                        attachment_dir=ATTACHMENT_DIR,
+                    )
+                )
 
-        if not items:
-            skipped += 1
-            logger.debug("  → 无 minoq/maxoq 信息，跳过")
-            continue
+                async with lock:
+                    if not items:
+                        skipped[0] += 1
+                        logger.debug("  → 无 minoq/maxoq 信息，跳过 [%s] %s",
+                                   entry.get("exchange"), aid)
+                        return
+                    for item in items:
+                        new_rows.append({
+                            "announcement_id": aid,
+                            "publish_date": entry.get("pub_date", ""),
+                            "exchange": entry.get("exchange", ""),
+                            "product_code": item["product_code"],
+                            "security_id": item["security_id"],
+                            "field": item["field"],
+                            "value": str(item["value"]),
+                            "effective_date": item["effective_date"],
+                            "announcement_title": entry.get("title", ""),
+                        })
+                        parsed[0] += 1
+                    logger.info("  + [%s] %s: %s 条",
+                               entry.get("exchange"), aid, len(items))
+            except Exception as e:
+                logger.warning("解析失败 [%s] %s: %s", entry.get("exchange"), aid, e)
 
-        for item in items:
-            row = {
-                "announcement_id": aid,
-                "publish_date": pub_date,
-                "exchange": exchange,
-                "product_code": item["product_code"],
-                "security_id": item["security_id"],
-                "field": item["field"],
-                "value": str(item["value"]),
-                "effective_date": item["effective_date"],
-                "announcement_title": title,
-            }
-            new_rows.append(row)
-            parsed += 1
-            logger.info("  + %s %s=%s", item["product_code"],
-                        item["field"], item["value"])
+    async def run_all():
+        tasks = [process_one(aid, entry) for aid, entry in candidates]
+        await asyncio.gather(*tasks)
+
+    asyncio.run(run_all())
+
+    logger.info("解析完成: +%s 条 (跳过 %s 条无信息)", parsed[0], skipped[0])
 
     logger.info("解析完成: +%s 条 (跳过 %s 条无信息)", parsed, skipped)
 

@@ -1149,15 +1149,6 @@ _ZHIPU_KEY = "f2f4fa94c73c4721ab3d7223548f49eb.e460UuOGcDGIuP6C"
 _ZHIPU_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 _ZHIPU_VISION_MODEL = "glm-4v-flash"
 
-# ═══ 交易所品种映射 ═══
-_EXCHANGE_PRODUCTS = {
-    "CFFEX": "IF,IH,IC,IM,T,TF,TL,TS,HO,MO",
-    "DCE": "A,B,BB,BZ,C,CS,EB,EG,FB,I,J,JD,JM,L,L-F,LG,LH,M,P,PG,PP,PP-F,RR,V,V-F,Y",
-    "SHFE": "CU,AL,ZN,PB,NI,SN,AU,AG,RB,WR,HC,SS,FU,BU,RU,SP,BR,AO",
-    "INE": "SC,BC,LU,NR,EC",
-    "GFEX": "SI,LC,PS,PT,PD",
-}
-
 
 def _extract_links(html, page_url):
     from urllib.parse import urljoin, unquote
@@ -1256,11 +1247,6 @@ def parse_announcement_fields(
             text = text[idx:]
             break
 
-    # 快速关键词过滤
-    if not any(kw in text for kw in ("下单", "开仓量", "交易指令")):
-        return []
-
-
     # 附件解析
     atext = ""
     if page_url and attachment_dir:
@@ -1280,15 +1266,13 @@ def parse_announcement_fields(
 
     prompt = (
         "从以下公告提取所有品种的下单/开仓限制数据，输出JSON。\n"
-        "【字段】\n"
         "- maxoq: 每次最大下单手数（如'每次最大下单数量为300手'→maxoq=300）\n"
-        "- minoq: 每次最小开仓下单数量（如'每次最小开仓下单数量调整为8手'→min oq=8）\n"
-        "- 不要提取：持仓限额(限仓X手)、单日开仓限额、保证金、涨跌停板\n"
-        "- product_code: 英文代码, 通用用ALL, 严格大小写(A不是a, AG不是ag)\n"
+        "- minoq: 每次最小开仓下单数量（如'最小开仓下单数量调整为8手'→min oq=8）\n"
+        "- 不要提取：持仓限额、单日开仓限额、保证金、涨跌停板\n"
+        "- product_code: 英文代码, 通用用ALL, 严格大小写\n"
         "- 无信息返回 {\"items\":[]}\n"
         + chr(10) + chr(10)
-        + f"交易所:{exchange} (品种范围: {_EXCHANGE_PRODUCTS.get(exchange, '')})"
-        + chr(10) + f"日期:{publish_date}"
+        + f"交易所:{exchange} 日期:{publish_date}"
         + chr(10) + chr(10) + full_text
     )
 
