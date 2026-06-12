@@ -39,6 +39,8 @@ _CONFIGS = [
      DCE_BASE_URL + "/dceapi/forward/publicweb/dailystat/dayQuotes"),
     ("DCE", "json", "TradingParameters", "_fetch_dce_tradepara",
      DCE_BASE_URL + "/dceapi/forward/publicweb/tradepara/dayTradPara"),
+    ("DCE", "json", "VarietyTradingParam", "_fetch_dce_tradingparam",
+     DCE_BASE_URL + "/dceapi/forward/publicweb/tradepara/tradingParam"),
     # CZCE
     ("CZCE", "txt", "SettlementParameters", "_fetch_czce_settlement",
      CZCE_BASE_URL + "/cn/DFSStaticFiles/Future/{YYYY}/{YYYYMMDD}/FutureDataClearParams.txt"),

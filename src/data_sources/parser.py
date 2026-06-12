@@ -179,8 +179,10 @@ def parse_file(fpath: Path) -> List[Dict]:
         return _parse_shfe_ine_tradepara(fpath, ".SHF")
     if "INE" in name and "TradingParameters" in name:
         return _parse_shfe_ine_tradepara(fpath, ".INE")
-    if "DCE" in name and "TradingParameters" in name:
+    if "DCE" in name and "TradingParameters" in name and "Variety" not in name:
         return _parse_dce_tradepara(fpath)
+    if "DCE" in name and "VarietyTradingParam" in name:
+        return _parse_dce_tradingparam(fpath)
     if "GFEX" in name and "TradingParameters" in name:
         return _parse_gfex_tradepara(fpath)
     if "CSI" in name and "MarketData" in name:
@@ -671,6 +673,31 @@ def _parse_dce_tradepara(fpath: Path) -> List[Dict]:
     return records
 
 
+def _parse_dce_tradingparam(fpath: Path) -> List[Dict]:
+    """Parse DCE product-level tradingParam (varietyId + maxHand).
+
+    Extracts maxHand → maxoq for all DCE products.
+    """
+    records = []
+    date = _extract_date_from_filename(fpath)
+    with open(fpath, encoding="utf-8") as f:
+        data = json.load(f)
+    items = data.get("data", [])
+    for item in items:
+        vid = item.get("varietyId", "")
+        if not vid:
+            continue
+        max_hand = _float(item.get("maxHand"))
+        if max_hand is None or max_hand <= 0:
+            continue
+        records.append({
+            "code": vid + ".DCE",
+            "date": date,
+            "maxoq": _float_to_int(max_hand),
+        })
+    return records
+
+
 # -----------------------------------------------------------------------
 # GFEX trading parameters JSON (loadDayList API)
 # Keys: contractId, riseLimitRate, riseLimit, fallLimit,
@@ -925,6 +952,36 @@ def merge_by_code_date(records: List[Dict]) -> List[Dict]:
                         existing[k] = v
         else:
             merged[key] = dict(rec)
+    # DCE 品种级 maxHand → 合约级 maxoq 传播
+    # 品种级 TradingParam.json 按 varietyId 返回 maxHand（如 l-F: maxHand=1000）
+    # 解析后 code 为 l.DCE / l-f.DCE（无合约月份数字），合约级如 l2607.DCE / l2607f.DCE
+    # 按字母前缀（品种代码 + 可选后缀）匹配传播
+    dce_variety: dict[str, dict] = {}
+    for rec in merged.values():
+        code = rec.get("code", "")
+        suffix = code.split(".")[-1] if "." in code else ""
+        if suffix.upper() != "DCE":
+            continue
+        raw = code.split(".")[0]
+        if not any(c.isdigit() for c in raw):
+            prefix = "".join(c for c in raw if c.isalpha()).upper()
+            if prefix:
+                dce_variety[prefix] = dict(rec)
+    if dce_variety:
+        for rec in merged.values():
+            code = rec.get("code", "")
+            suffix = code.split(".")[-1] if "." in code else ""
+            if suffix.upper() != "DCE":
+                continue
+            raw = code.split(".")[0]
+            if any(c.isdigit() for c in raw):
+                prefix = "".join(c for c in raw if c.isalpha()).upper()
+                if prefix in dce_variety:
+                    vrec = dce_variety[prefix]
+                    for k, v in vrec.items():
+                        if v is not None and rec.get(k) is None and k not in ("code", "date"):
+                            rec[k] = v
+
     # OHLC 0 → None（通过 Modifier 做数据清洗）
     for rec in merged.values():
         zero_price_to_none(rec)
@@ -974,3 +1031,112 @@ def merge_by_code_date(records: List[Dict]) -> List[Dict]:
             rec.pop(key, None)
 
     return list(merged.values())
+
+
+# ══════════════════════════════════════════════════════
+
+
+# ══════════════════════════════════════════════════════
+#  LLM 提取 maxoq / minoq
+# ══════════════════════════════════════════════════════
+
+_DS_BASE = "https://api.deepseek.com"
+_DS_KEY = "sk-9bf4150a6cfe435a8ae66da744b17487"
+_DS_MODEL = "deepseek-v4-flash"
+
+
+def parse_minoq_maxoq(html: str, exchange: str, title: str,
+                      publish_date: str) -> list[dict]:
+    """LLM 提取 maxoq/minoq. 无相关信息返回 []."""
+    import requests
+
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "nav", "header", "footer",
+                     "noscript", "iframe"]):
+        tag.decompose()
+    body = None
+    for cls in ["TRS_Editor", "article-content", "articleContent"]:
+        el = soup.find(class_=re.compile(cls, re.I))
+        if el:
+            body = el
+            break
+    text = body.get_text(separator=" ", strip=True) if body else soup.get_text()
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\]\(http[^)]*\)", "", text)
+    text = re.sub(r"\[javascript:.*?\]", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    if len(text) > 6000:
+        for marker in ["各会员单位", "各会员", "第1章", "第一章",
+                       "第一条", "第1条"]:
+            idx = text.find(marker)
+            if idx > 500:
+                text = text[max(0, idx - 100):]
+                break
+
+    prompt = (
+        "提取公告中每个品种的每次最大/最小下单手数(也称最大/最小开仓下单数量)，输出JSON。"
+        + chr(10) + "- product_code用英文代码(如IF,EB,BZ),通用用ALL"
+        + chr(10) + '- 提取所有品种, 无则{"items":[]}'
+        + chr(10) + chr(10) + f"交易所:{exchange} 日期:{publish_date}"
+        + chr(10) + chr(10) + text[:3000]
+    )
+
+    try:
+        resp = requests.post(
+            f"{_DS_BASE}/chat/completions",
+            headers={"Authorization": f"Bearer {_DS_KEY}",
+                     "Content-Type": "application/json"},
+            json={"model": _DS_MODEL,
+                  "messages": [{"role": "user", "content": prompt}],
+                  "response_format": {"type": "json_object"},
+                  "temperature": 0, "max_tokens": 1024},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        raw = resp.json()["choices"][0]["message"]["content"]
+    except Exception:
+        return []
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        m = re.search(r"\[.*\]", raw, re.DOTALL)
+        if not m:
+            return []
+        data = json.loads(m.group(0))
+
+    items = data if isinstance(data, list) else data.get("items", [])
+
+    results = []
+    for item in items:
+        pc = item.get("product_code") or item.get("product", "ALL")
+        field = item.get("field", "")
+        if not field:
+            for k in item:
+                if any(x in k.lower() for x in ("minoq","min_qty","min_open","min_order","minopen","min")):
+                    field = "minoq"
+                    break
+                if any(x in k.lower() for x in ("maxoq","max_qty","max_open","max_order","maxopen","max")):
+                    field = "maxoq"
+                    break
+        if not field:
+            continue
+        value = item.get("value") or 0
+        if not value:
+            for kk, vv in item.items():
+                kl = kk.lower()
+                if any(x in kl for x in ("min_qty","minoq","min_order","min_open")):
+                    value = vv; break
+                if any(x in kl for x in ("max_qty","maxoq","max_order","max_open")):
+                    value = vv; break
+        if not isinstance(value, (int, float)) or value <= 0:
+            continue
+        results.append({
+            "product_code": str(pc),
+            "security_id": str(item.get("security_id", "ALL")),
+            "field": field,
+            "value": int(value),
+            "effective_date": str(item.get("effective_date", publish_date)),
+        })
+    return results
