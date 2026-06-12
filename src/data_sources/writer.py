@@ -4,7 +4,7 @@
 import argparse
 import logging
 import os
-from pathlib import Path
+import csv
 
 from mxz_utils.logging_config import get_logger
 
@@ -14,7 +14,7 @@ from data_sources.modifier import (should_filter_contract,
     fix_dce_limit_prices, fix_gfe_margin, fix_gfe_limit_prices,
     fix_all_margin, fill_zero_volume_close,
     fill_cffex_margin_from_history, fill_if_basis,
-    inject_order_limits, margin_to_pct)
+    margin_to_pct)
 from data_sources.trade_date import prev_trading_date
 from data_sources.db import upsert_rows, delete_rows
 
@@ -24,6 +24,21 @@ RAW_DIR = Path(os.environ.get("DATA_DIR", "./data")) / "raw"
 logger = get_logger(
     "data_sources.writer", logging.DEBUG, os.environ.get("LOG_DIR", "./logs"), "Writer",
 )
+
+
+
+# ═══════════════════════════════════════════
+#  数据合并: 从外部 CSV 注入 minoq/maxoq
+# ═══════════════════════════════════════════
+
+# 10. 下单量 (minoq/maxoq) 静态注入
+# ===================================================================
+
+# exchange suffix → config exchange name
+_SUFFIX_TO_EXCHANGE = {
+    ".DCE": "DCE", ".CZC": "CZCE", ".SHF": "SHFE",
+    ".INE": "INE", ".GFE": "GFEX", ".CFE": "CFFEX",
+}
 
 
 def _apply_modifiers(records):
@@ -45,7 +60,6 @@ def _apply_modifiers(records):
     records = fill_zero_volume_close(records)
     records = fill_cffex_margin_from_history(records)
     records = fill_if_basis(records)
-    records = inject_order_limits(records)  # 静态注入 minoq/maxoq
 
     # ---- 公司口径调整 - Wind 标准 ----
     for r in records:
@@ -152,6 +166,7 @@ def write_trade_date(date_str: str, table: str,
         return 0, [s.stats_summary for s in stats_list]
 
     records = merge_by_code_date(records)
+    records = inject_order_limits(records)  # 外部 CSV → minoq/maxoq 合并
     records = _apply_modifiers(records)
 
     norm_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"

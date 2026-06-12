@@ -1149,6 +1149,13 @@ _ZHIPU_KEY = "f2f4fa94c73c4721ab3d7223548f49eb.e460UuOGcDGIuP6C"
 _ZHIPU_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 _ZHIPU_VISION_MODEL = "glm-4v-flash"
 
+_PROMPT_DIR = Path(os.path.dirname(os.path.abspath(__file__))).parent.parent / "prompts"
+
+
+def _load_prompt(name: str) -> str:
+    """加载 prompts/ 目录下的提示词模板。"""
+    return (_PROMPT_DIR / name).read_text(encoding="utf-8")
+
 
 def _extract_links(html, page_url):
     from urllib.parse import urljoin, unquote
@@ -1264,16 +1271,8 @@ def parse_announcement_fields(
     if len(full_text) > 5000:
         full_text = full_text[:5000]
 
-    prompt = (
-        "从以下公告提取所有品种的下单/开仓限制数据，输出JSON。\n"
-        "- maxoq: 每次最大下单手数（如'每次最大下单数量为300手'→maxoq=300）\n"
-        "- minoq: 每次最小开仓下单数量（如'最小开仓下单数量调整为8手'→min oq=8）\n"
-        "- 不要提取：持仓限额、单日开仓限额、保证金、涨跌停板\n"
-        "- product_code: 英文代码, 通用用ALL, 严格大小写\n"
-        "- 无信息返回 {\"items\":[]}\n"
-        + chr(10) + chr(10)
-        + f"交易所:{exchange} 日期:{publish_date}"
-        + chr(10) + chr(10) + full_text
+    prompt = _load_prompt("extract_fields.txt").format(
+        exchange=exchange, publish_date=publish_date, text=full_text
     )
 
     try:
