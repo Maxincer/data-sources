@@ -1165,18 +1165,26 @@ def _extract_links(html, page_url):
         href = a["href"].strip()
         ext = Path(href).suffix.lower()
         if ext in (".pdf", ".xls", ".xlsx"):
-            results.append({"url": urljoin(page_url, href),
-                            "filename": Path(unquote(href.split("/")[-1])).name,
-                            "ext": ext})
+            abs_url = urljoin(page_url, href)
+            # 从 URL 提取纯数字/字母 ID（去除中文和路径分隔符）
+            raw_name = unquote(abs_url.split("/")[-1].split("?")[0])
+            url_id = re.sub(r"[^a-zA-Z0-9_.-]", "", Path(raw_name).stem)
+            if not url_id:
+                url_id = str(abs(hash(abs_url)) % 10**8)
+            results.append({"url": abs_url, "url_id": url_id, "ext": ext})
     return results
 
 
-def _download(url, save_dir):
+def _download(url, save_dir, exchange="", date_str="", url_id=""):
+    """下载附件，文件名格式: {exchange}_{date}_{url_id}.{ext}"""
     import requests as _req
-    from urllib.parse import unquote
-    fname = unquote(url.split("/")[-1].split("?")[0])
-    if not fname or "." not in fname:
-        fname = f"att_{abs(hash(url)) % 10**8}{Path(url).suffix or '.pdf'}"
+    ext = Path(url).suffix or ".pdf"
+    if exchange and date_str and url_id:
+        fname = f"{exchange}_{date_str}_{url_id}{ext}"
+    else:
+        fname = Path(url).name.split("?")[0]
+        if not fname or "." not in fname:
+            fname = f"att_{abs(hash(url)) % 10**8}{ext}"
     local = save_dir / fname
     if local.exists():
         return local
@@ -1258,12 +1266,13 @@ def parse_announcement_fields(
     atext = ""
     if page_url and attachment_dir:
         for link in _extract_links(html, page_url):
-            local = _download(link["url"], attachment_dir)
+            local = _download(link["url"], attachment_dir,
+                             exchange, publish_date, link["url_id"])
             if local:
                 try:
                     t = (_pdf_to_text(local) if link["ext"] == ".pdf"
                          else _xlsx_to_text(local))
-                    atext += f"\n[附件:{link['filename']}]\n{t}\n"
+                    atext += f"\n[附件:{local.name}]\n{t}\n"
                 except Exception:
                     pass
 
