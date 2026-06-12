@@ -1040,9 +1040,9 @@ def merge_by_code_date(records: List[Dict]) -> List[Dict]:
 #  LLM 提取 maxoq / minoq
 # ══════════════════════════════════════════════════════
 
-_DS_BASE = "https://api.deepseek.com"
-_DS_KEY = "sk-9bf4150a6cfe435a8ae66da744b17487"
-_DS_MODEL = "deepseek-v4-flash"
+_DS_BASE = "https://open.bigmodel.cn/api/paas/v4"
+_DS_KEY = "f2f4fa94c73c4721ab3d7223548f49eb.e460UuOGcDGIuP6C"
+_DS_MODEL = "glm-4-flash"
 
 
 def parse_minoq_maxoq(html: str, exchange: str, title: str,
@@ -1137,6 +1137,224 @@ def parse_minoq_maxoq(html: str, exchange: str, title: str,
             "security_id": str(item.get("security_id", "ALL")),
             "field": field,
             "value": int(value),
+            "effective_date": str(item.get("effective_date", publish_date)),
+        })
+    return results
+
+# ══════════════════════════════════════════
+#  附件解析 + parse_announcement_fields
+# ══════════════════════════════════════════
+
+_ZHIPU_KEY = "f2f4fa94c73c4721ab3d7223548f49eb.e460UuOGcDGIuP6C"
+_ZHIPU_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+_ZHIPU_VISION_MODEL = "glm-4v-flash"
+
+
+def _extract_links(html, page_url):
+    from urllib.parse import urljoin, unquote
+    soup = BeautifulSoup(html, "html.parser")
+    results = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        ext = Path(href).suffix.lower()
+        if ext in (".pdf", ".xls", ".xlsx"):
+            results.append({"url": urljoin(page_url, href),
+                            "filename": Path(unquote(href.split("/")[-1])).name,
+                            "ext": ext})
+    return results
+
+
+def _download(url, save_dir):
+    import requests as _req
+    from urllib.parse import unquote
+    fname = unquote(url.split("/")[-1].split("?")[0])
+    if not fname or "." not in fname:
+        fname = f"att_{abs(hash(url)) % 10**8}{Path(url).suffix or '.pdf'}"
+    local = save_dir / fname
+    if local.exists():
+        return local
+    save_dir.mkdir(parents=True, exist_ok=True)
+    r = _req.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+    r.raise_for_status()
+    local.write_bytes(r.content)
+    return local
+
+
+def _pdf_to_text(pdf_path):
+    import fitz, base64, requests as _req
+    doc = fitz.open(str(pdf_path))
+    parts = []
+    for p in range(min(len(doc), 10)):
+        try:
+            pix = doc[p].get_pixmap(dpi=150)
+            b64 = base64.b64encode(pix.tobytes("png")).decode()
+            r = _req.post(_ZHIPU_URL,
+                headers={"Authorization": f"Bearer {_ZHIPU_KEY}",
+                         "Content-Type": "application/json"},
+                json={"model": _ZHIPU_VISION_MODEL, "messages": [{"role": "user",
+                    "content": [{"type": "image_url",
+                     "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                    {"type": "text", "text": "提取此页中与下单量、开仓手数、交易限额相关的文字，逐字输出。"}
+                ]}], "max_tokens": 1024, "temperature": 0}, timeout=60)
+            parts.append(r.json()["choices"][0]["message"]["content"]
+                        if r.status_code == 200 else "")
+        except Exception:
+            pass
+    doc.close()
+    return "\n".join(parts)
+
+
+def _xlsx_to_text(path):
+    import openpyxl
+    try:
+        wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
+        out = []
+        for sn in wb.sheetnames[:2]:
+            ws = wb[sn]
+            rows = [",".join(str(v) for v in r if v is not None)
+                    for r in list(ws.iter_rows(values_only=True))[:30] if any(r)]
+            if rows:
+                out.append(f"[Sheet:{sn}]\n" + "\n".join(rows))
+        wb.close()
+        return "\n".join(out)
+    except Exception:
+        return ""
+
+
+def parse_announcement_fields(
+    html: str, exchange: str, title: str, publish_date: str,
+    page_url: str = "", attachment_dir=None,
+) -> list[dict]:
+    """解析公告提取 minoq/maxoq。含附件检测、PDF 视觉解析。"""
+    import requests as _req2
+    soup = BeautifulSoup(html, "html.parser")
+    for t in soup(["script", "style", "nav", "header", "footer",
+                   "noscript", "iframe"]):
+        t.decompose()
+    body = None
+    for cls in ["TRS_Editor", "article-content", "articleContent"]:
+        el = soup.find(class_=re.compile(cls, re.I))
+        if el:
+            body = el
+            break
+    text = (body.get_text(separator=" ", strip=True) if body
+            else soup.get_text())
+    text = re.sub(r"\s+", " ", text).strip()
+    for mark in ["第一条", "第一章", "第1条", "第1章",
+                 "各会员单位", "各会员"]:
+        idx = text.find(mark)
+        if idx > 500:
+            text = text[idx:]
+            break
+
+    # 相关性预判
+    try:
+        r = _req2.post(f"{_DS_BASE}/chat/completions",
+            headers={"Authorization": f"Bearer {_DS_KEY}",
+                     "Content-Type": "application/json"},
+            json={"model": _DS_MODEL, "messages": [{"role": "user",
+                "content": ("判断以下公告是否涉及下单数量、开仓手数、交"
+                            "易限额条款。仅回 YES/NO。")
+                + chr(10) + chr(10) + f"标题:{title}"
+                + chr(10) + f"内容:{text[:800]}"}],
+                "temperature": 0, "max_tokens": 10},
+            timeout=30)
+        if r.status_code == 200:
+            ans = r.json()["choices"][0]["message"]["content"]
+            if "NO" in ans.upper() and "YES" not in ans.upper():
+                return []
+    except Exception:
+        pass
+
+    # 附件解析
+    atext = ""
+    if page_url and attachment_dir:
+        for link in _extract_links(html, page_url):
+            local = _download(link["url"], attachment_dir)
+            if local:
+                try:
+                    t = (_pdf_to_text(local) if link["ext"] == ".pdf"
+                         else _xlsx_to_text(local))
+                    atext += f"\n[附件:{link['filename']}]\n{t}\n"
+                except Exception:
+                    pass
+
+    full_text = (text[:3000] if atext else text) + atext
+    if len(full_text) > 5000:
+        full_text = full_text[:5000]
+
+    prompt = (
+        "提取公告中每个品种的下单数量、开仓手数、交易限额，输出JSON。"
+        + chr(10) + "- product_code用英文代码(如IF,EB,BZ),通用用ALL"
+        + chr(10) + '- 提取所有品种, 无则{"items":[]}'
+        + chr(10) + chr(10) + f"交易所:{exchange} 日期:{publish_date}"
+        + chr(10) + chr(10) + full_text
+    )
+
+    try:
+        r = _req2.post(f"{_DS_BASE}/chat/completions",
+            headers={"Authorization": f"Bearer {_DS_KEY}",
+                     "Content-Type": "application/json"},
+            json={"model": _DS_MODEL,
+                  "messages": [{"role": "user", "content": prompt}],
+                  "temperature": 0, "max_tokens": 1024},
+            timeout=120)
+        r.raise_for_status()
+        raw = r.json()["choices"][0]["message"]["content"]
+    except Exception:
+        return []
+
+    raw = raw.strip()
+    raw = raw.removeprefix("```json").removeprefix("```").strip()
+    # 截断到最后一个 ``` 之前
+    idx = raw.rfind("```")
+    if idx > 0:
+        raw = raw[:idx].strip()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        # 尝试提取 JSON 对象/数组
+        try:
+            m = re.search(r'[{].*[}]', raw, re.DOTALL)
+            if not m:
+                m = re.search(r'[\[].*[\]]', raw, re.DOTALL)
+            if m:
+                data = json.loads(m.group(0))
+            else:
+                return []
+        except Exception:
+            return []
+
+    items = data if isinstance(data, list) else data.get("items", [])
+    results = []
+    for item in items:
+        pc = item.get("product_code") or item.get("product", "ALL")
+        field = ""
+        for k in item:
+            kl = k.lower()
+            if any(x in kl for x in ("minoq", "min_qty", "min_open",
+                "min_order", "minopen", "min", "最小")):
+                field = "minoq"
+                break
+            if any(x in kl for x in ("maxoq", "max_qty", "max_open",
+                "max_order", "max", "下单", "order_quantity")):
+                field = "maxoq"
+                break
+        if not field:
+            continue
+        val = item.get("value") or 0
+        if not val:
+            for kk, vv in item.items():
+                if vv and isinstance(vv, (int, float)) and vv > 0:
+                    val = int(vv)
+                    break
+        if not isinstance(val, (int, float)) or val <= 0:
+            continue
+        results.append({
+            "product_code": str(pc),
+            "security_id": str(item.get("security_id", "ALL")),
+            "field": field,
+            "value": int(val),
             "effective_date": str(item.get("effective_date", publish_date)),
         })
     return results
