@@ -65,6 +65,9 @@ _CONFIGS = [
     # CSI
     ("CSI", "json", "MarketData", "_fetch_csi_market",
      CSI_BASE_URL + "/csindex-home/index-list/query-index-item"),
+    # Tushare
+    ("TS", "json", "IndexClose", "_fetch_ts_index_close",
+     "tushare://index_daily"),
 ]
 
 

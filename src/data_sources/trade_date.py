@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
+r"""
 上交所交易日历工具。
 
 存储为本地纯文本文件，每行一个 YYYYMMDD 整数，升序排列。

@@ -60,7 +60,8 @@ def _now_str() -> str:
 # ── 路径 (由 service_manager.sh 传入) ──
 DATA_DIR = Path(os.environ["DATA_DIR"])
 LOG_DIR = Path(os.environ["LOG_DIR"])
-METADATA_FILE = DATA_DIR / "announcements_metadata.json"
+METADATA_FILE = DATA_DIR / "raw" / "announcements" / "announcements_metadata.json"
+ANNOUNCEMENTS_DIR = DATA_DIR / "raw" / "announcements"
 
 # ── Logger ────────────────────────────────────────────
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -90,7 +91,7 @@ CFFEX_DAILY_PAGES = [
     "http://www.cffex.com.cn/cn/jysgg.html",   # 交易所公告
     "http://www.cffex.com.cn/cn/jystz.html",   # 交易所通知
 ]
-DAILY_START_DATE = os.environ.get("DAILY_START_DATE", "20260101")
+DAILY_START_DATE = os.environ.get("DAILY_START_DATE", "20251201")
 
 # CFFEX 规则页中需要跳过的栏目
 CFFEX_SKIP_SECTIONS = {"已废止业务规则", "历史版本"}
@@ -126,14 +127,14 @@ DCE_CMS_ARTICLE_URL = "http://www.dce.com.cn/dceapi/cms/info/articleByPage"
 _download_failures: list[dict] = []
 
 
-def _check_download(html: str, exchange: str, aid: str, title: str) -> str | None:
+def _check_download(html: str, exchange: str, aid: str, title: str, url: str = "") -> str | None:
     """协议级检查: 响应是否空/截断/404.
 
     返回 None = 通过, 返回 str = 失败原因.
     """
     if not html or len(html) < 200:
         _download_failures.append(dict(
-            exchange=exchange, aid=aid, title=title[:60],
+            exchange=exchange, aid=aid, title=title[:60], url=url,
             reason="响应体过短",
         ))
         return "响应体过短"
@@ -142,7 +143,7 @@ def _check_download(html: str, exchange: str, aid: str, title: str) -> str | Non
     title_tag = re.search(r"<title>([^<]+)</title>", html)
     if title_tag and "404" in title_tag.group(1):
         _download_failures.append(dict(
-            exchange=exchange, aid=aid, title=title[:60],
+            exchange=exchange, aid=aid, title=title[:60], url=url,
             reason="404",
         ))
         return "404"
@@ -164,8 +165,8 @@ def _log_download_failures():
         logger.warning("  %s: %s 条", ex, len(items))
         for item in items:
             logger.warning(
-                "    [%s] %s | %s",
-                item["reason"], item["aid"], item["title"],
+                "    [%s] %s | %s | %s",
+                item["reason"], item["aid"], item["title"], item.get("url", ""),
             )
     _download_failures.clear()
 
@@ -222,17 +223,17 @@ def upsert_record(key: str, record: dict):
 
 def clean_orphans(meta: dict[str, dict]):
     """删除 DATA_DIR 中存在但 metadata 中无记录的文件."""
-    if not DATA_DIR.exists():
+    if not ANNOUNCEMENTS_DIR.exists():
         return
 
     meta_paths: set[str] = set()
     for rec in meta.values():
-        sf = rec.get("source_file", "")
+        sf = rec["source_file"]
         if sf:
             meta_paths.add(sf)
 
     removed = 0
-    for fpath in DATA_DIR.rglob("*.html"):
+    for fpath in ANNOUNCEMENTS_DIR.rglob("*.html"):
         if fpath.is_file():
             rel = str(fpath.relative_to(Path.cwd()))
             if rel not in meta_paths:
@@ -244,7 +245,7 @@ def clean_orphans(meta: dict[str, dict]):
         logger.info("[clean] 共删除 %s 个孤儿文件", removed)
 
     # 清理空目录
-    for dirpath in sorted(DATA_DIR.rglob("*"), reverse=True):
+    for dirpath in sorted(ANNOUNCEMENTS_DIR.rglob("*"), reverse=True):
         if dirpath.is_dir() and not any(dirpath.iterdir()):
             dirpath.rmdir()
 
@@ -447,7 +448,7 @@ def _download_cffex_articles(ctx, articles: list[dict], meta: dict):
             page.close()
 
             if len(html) > 500:
-                if _check_download(html, "CFFEX", aid, a.get("title", "")):
+                if _check_download(html, "CFFEX", aid, a.get("title", ""), a.get("url", "")):
                     continue
                 _locked_write_html(filepath, html)
 
@@ -535,7 +536,7 @@ def collect_cffex():
 def _dce_extract_date_id(url: str, pub_date: str = "") -> tuple[str, str]:
     """从 DCE URL 提取 (YYYYMMDD, article_id).
 
-    规则类 URL: /dce/content/2018/zchjygz/6146499.html  → ('20180101', '6146499')
+    规则类 URL: /dce/content/2018/zchjygz/6146499.html  → ('2018MMDD', '6146499')
     日常类 URL: 从标题中的 YYYY-MM-DD 取日期
     """
     m = re.search(r'/(\d+)\.html?$', url)
@@ -544,12 +545,19 @@ def _dce_extract_date_id(url: str, pub_date: str = "") -> tuple[str, str]:
     if pub_date:
         return pub_date.replace("-", ""), article_id
 
-    # Fallback: 从 URL 路径提取年份
-    m = re.search(r'/content/(\d{4})/', url)
+    # Fallback: 从 URL 路径提取日期 (YYYY / YYYYMM / YYYYMMDD)
+    # 缺失部分用字面占位: YYYY → YYYYMMDD, YYYYMM → YYYYMMDD
+    m = re.search(r'/content/(\d{4,8})/', url)
     if m:
-        return f"{m.group(1)}0101", article_id
+        d = m.group(1)
+        if len(d) == 8:            # YYYYMMDD → 直接使用
+            return (d, article_id)
+        elif len(d) == 6:          # YYYYMM → 补 DD
+            return (f"{d}DD", article_id)
+        else:                      # YYYY → 补 MMDD
+            return (f"{d}MMDD", article_id)
 
-    return ("00000000", article_id)
+    return ("YYYYMMDD", article_id)
 
 
 def _dce_article_id(url: str, pub_date: str = "") -> str:
@@ -659,15 +667,15 @@ def _dce_api_fetch_page(
         articles = []
         for row in rows:
             show_date = (
-                row.get("showDate", "")[:10].replace("-", "")
+                row["showDate"][:10].replace("-", "")
             )  # "2026-06-09" → "20260609"
-            static_url = row.get("articleStaticUrl", "")
+            static_url = row["articleStaticUrl"]
             articles.append({
-                "id": row.get("id", ""),
-                "title": row.get("title", ""),
+                "id": row["id"],
+                "title": row["title"],
                 "pub_date": show_date,
-                "show_date": row.get("showDate", ""),
-                "content": row.get("content", ""),
+                "show_date": row["showDate"],
+                "content": row["content"],
                 "url": (
                 "http://www.dce.com.cn/dce/" + static_url
                 if static_url else ""
@@ -815,7 +823,7 @@ def _dce_download_articles(
                 filepath = DCE_BASE / dce_category / filename
                 filepath.parent.mkdir(parents=True, exist_ok=True)
 
-                if _check_download(raw_content, "DCE", aid, a.get("title", "")):
+                if _check_download(raw_content, "DCE", aid, a.get("title", ""), a.get("url", "")):
                     continue
 
                 _locked_write_html(filepath, raw_content)
@@ -826,7 +834,7 @@ def _dce_download_articles(
                     "title": a.get("title", ""),
                     "exchange": "DCE",
                     "category": dce_category,
-                    "pub_date": a.get("pub_date", ""),
+                    "pub_date": a.get("pub_date") or _dce_extract_date_id(a["url"], "")[0],
                     "source_file": str(filepath.relative_to(Path.cwd())),
                     "status": "downloaded",
                     "note": "Tavily 提取的文本内容 (非原始 HTML, 因 WAF 阻挡)",
@@ -868,7 +876,7 @@ def _dce_api_save_articles(
             logger.warning("[DCE/API] 内容过短: %s", aid)
             continue
 
-        if _check_download(content_html, "DCE", aid, a.get("title", "")):
+        if _check_download(content_html, "DCE", aid, a.get("title", ""), a.get("url", "")):
             continue
 
         filename = _dce_build_filename(a)
@@ -1194,7 +1202,7 @@ def _gfex_download_articles(articles: list[dict], meta: dict) -> int:
                 fname = f"GFEX_{pub_date}_{uuid_part}.html"
                 filepath = GFEX_BASE / category / fname
 
-            if _check_download(html, "GFEX", aid, a.get("title", "")):
+            if _check_download(html, "GFEX", aid, a.get("title", ""), a.get("url", "")):
                 continue
 
             _locked_write_html(filepath, html)
@@ -1404,7 +1412,7 @@ def collect_ine():
                     time.sleep(1)
                     html = page.content()
                     if len(html) > 500:
-                        if _check_download(html, "INE", aid, a["title"]):
+                        if _check_download(html, "INE", aid, a["title"], a.get("url", "")):
                             continue
                         _locked_write_html(fp, html)
                         upsert_record(aid, {
@@ -1449,7 +1457,7 @@ def collect_ine():
                     time.sleep(1)
                     html = page.content()
                     if len(html) > 500:
-                        if _check_download(html, "INE", aid, a["title"]):
+                        if _check_download(html, "INE", aid, a["title"], a.get("url", "")):
                             continue
                         _locked_write_html(fp, html)
                         upsert_record(aid, {
@@ -1636,7 +1644,7 @@ def collect_shfe():
                     time.sleep(1)
                     html = page.content()
                     if len(html) > 500:
-                        if _check_download(html, "SHFE", aid, a["title"]):
+                        if _check_download(html, "SHFE", aid, a["title"], a.get("url", "")):
                             continue
                         _locked_write_html(fp, html)
                         upsert_record(aid, {
@@ -1681,7 +1689,7 @@ def collect_shfe():
                     time.sleep(1)
                     html = page.content()
                     if len(html) > 500:
-                        if _check_download(html, "SHFE", aid, a["title"]):
+                        if _check_download(html, "SHFE", aid, a["title"], a.get("url", "")):
                             continue
                         _locked_write_html(fp, html)
                         upsert_record(aid, {

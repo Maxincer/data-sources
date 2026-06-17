@@ -4,12 +4,13 @@
 """
 Parse raw exchange data files into unified daily bar records.
 
-Each parser function reads a raw file from data/raw/ and yields
+Each parser function reads a raw file from data/raw/structured/ and yields
 dicts with keys matching t_futures_info columns.
 
 Stat tracking: total_records, missing count per field, missing deviation.
 """
 
+import asyncio
 import csv
 import json
 import os
@@ -17,6 +18,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import aiohttp
 from bs4 import BeautifulSoup
 
 from data_sources.modifier import (
@@ -32,7 +34,7 @@ SHFE_PRODUCTS = {"CU","AL","ZN","PB","NI","SN","AU","AG","RB","WR",
 INE_PRODUCTS = {"SC","BC","LU","NR","EC"}
 
 
-RAW_DIR = Path(os.environ.get("DATA_DIR", "./data")) / "raw"
+RAW_DIR = Path(os.environ["DATA_DIR"]) / "raw" / "structured"
 
 # Exchange code suffixes for DB
 SUFFIX_MAP = {
@@ -131,7 +133,7 @@ def verify_settle_vs_close(record: Dict) -> Optional[str]:
 # -------------------------------------------------------------------------
 
 def parse_directory(dirpath: Path) -> List[Dict]:
-    """Auto-discover and parse all raw files in data/raw/."""
+    """Auto-discover and parse all raw files in data/raw/structured/."""
     records = []
     for fpath in sorted(dirpath.iterdir()):
         if fpath.suffix == ".jsonl":
@@ -1040,116 +1042,41 @@ def merge_by_code_date(records: List[Dict]) -> List[Dict]:
 #  LLM 提取 maxoq / minoq
 # ══════════════════════════════════════════════════════
 
-_DS_BASE = "https://open.bigmodel.cn/api/paas/v4"
-_DS_KEY = "f2f4fa94c73c4721ab3d7223548f49eb.e460UuOGcDGIuP6C"
-_DS_MODEL = "glm-4-flash"
+from mxz_utils.logging_config import get_logger
+
+_llm_logger = get_logger(
+    name="AnalyseAnnouncementsService",
+    level="DEBUG",
+    dirpath_logs=str(Path(os.environ["LOG_DIR"])),
+    logfile_basename="AnalyseAnnouncementsService",
+)
+
+_DS_BASE = "https://api.deepseek.com"
+_DS_KEY = os.environ["DEEPSEEK_API_KEY"]
+_DS_MODEL = "deepseek-v4-flash"
+
+# 附件下载失败累积列表
+_att_failures: list[dict] = []
 
 
-def parse_minoq_maxoq(html: str, exchange: str, title: str,
-                      publish_date: str) -> list[dict]:
-    """LLM 提取 maxoq/minoq. 无相关信息返回 []."""
-    import requests
+def clear_attachment_failures():
+    """清空附件失败列表（每次运行前调用）。"""
+    _att_failures.clear()
 
-    soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "nav", "header", "footer",
-                     "noscript", "iframe"]):
-        tag.decompose()
-    body = None
-    for cls in ["TRS_Editor", "article-content", "articleContent"]:
-        el = soup.find(class_=re.compile(cls, re.I))
-        if el:
-            body = el
-            break
-    text = body.get_text(separator=" ", strip=True) if body else soup.get_text()
-    text = re.sub(r"\s+", " ", text).strip()
-    text = re.sub(r"\]\(http[^)]*\)", "", text)
-    text = re.sub(r"\[javascript:.*?\]", "", text)
-    text = re.sub(r"\s+", " ", text).strip()
 
-    if len(text) > 6000:
-        for marker in ["各会员单位", "各会员", "第1章", "第一章",
-                       "第一条", "第1条"]:
-            idx = text.find(marker)
-            if idx > 500:
-                text = text[max(0, idx - 100):]
-                break
+def get_attachment_failures() -> list[dict]:
+    """获取附件下载失败列表。"""
+    return list(_att_failures)
 
-    prompt = (
-        "提取公告中每个品种的每次最大/最小下单手数(也称最大/最小开仓下单数量)，输出JSON。"
-        + chr(10) + "- product_code用英文代码(如IF,EB,BZ),通用用ALL"
-        + chr(10) + '- 提取所有品种, 无则{"items":[]}'
-        + chr(10) + chr(10) + f"交易所:{exchange} 日期:{publish_date}"
-        + chr(10) + chr(10) + text[:3000]
-    )
-
-    try:
-        resp = requests.post(
-            f"{_DS_BASE}/chat/completions",
-            headers={"Authorization": f"Bearer {_DS_KEY}",
-                     "Content-Type": "application/json"},
-            json={"model": _DS_MODEL,
-                  "messages": [{"role": "user", "content": prompt}],
-                  "response_format": {"type": "json_object"},
-                  "temperature": 0, "max_tokens": 1024},
-            timeout=120,
-        )
-        resp.raise_for_status()
-        raw = resp.json()["choices"][0]["message"]["content"]
-    except Exception:
-        return []
-
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        m = re.search(r"\[.*\]", raw, re.DOTALL)
-        if not m:
-            return []
-        data = json.loads(m.group(0))
-
-    items = data if isinstance(data, list) else data.get("items", [])
-
-    results = []
-    for item in items:
-        pc = item.get("product_code") or item.get("product", "ALL")
-        field = item.get("field", "")
-        if not field:
-            for k in item:
-                if any(x in k.lower() for x in ("minoq","min_qty","min_open","min_order","minopen","min")):
-                    field = "minoq"
-                    break
-                if any(x in k.lower() for x in ("maxoq","max_qty","max_open","max_order","maxopen","max")):
-                    field = "maxoq"
-                    break
-        if not field:
-            continue
-        value = item.get("value") or 0
-        if not value:
-            for kk, vv in item.items():
-                kl = kk.lower()
-                if any(x in kl for x in ("min_qty","minoq","min_order","min_open")):
-                    value = vv; break
-                if any(x in kl for x in ("max_qty","maxoq","max_order","max_open")):
-                    value = vv; break
-        if not isinstance(value, (int, float)) or value <= 0:
-            continue
-        results.append({
-            "product_code": str(pc),
-            "security_id": str(item.get("security_id", "ALL")),
-            "field": field,
-            "value": int(value),
-            "effective_date": str(item.get("effective_date", publish_date)),
-        })
-    return results
-
-# ══════════════════════════════════════════
-#  附件解析 + parse_announcement_fields
-# ══════════════════════════════════════════
 
 _ZHIPU_KEY = "f2f4fa94c73c4721ab3d7223548f49eb.e460UuOGcDGIuP6C"
 _ZHIPU_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 _ZHIPU_VISION_MODEL = "glm-4v-flash"
 
-_PROMPT_DIR = Path(os.path.dirname(os.path.abspath(__file__))).parent.parent / "prompts"
+_PROMPT_DIR = (
+    Path(os.path.dirname(os.path.abspath(__file__))).parent.parent
+    / "prompts"
+)
 
 
 def _load_prompt(name: str) -> str:
@@ -1175,9 +1102,9 @@ def _extract_links(html, page_url):
     return results
 
 
-def _download(url, save_dir, exchange="", date_str="", url_id=""):
+async def _download(url, save_dir, exchange="", date_str="", url_id="", session=None):
     """下载附件，文件名格式: {exchange}_{date}_{url_id}.{ext}"""
-    import requests as _req
+    import aiohttp
     ext = Path(url).suffix or ".pdf"
     if exchange and date_str and url_id:
         fname = f"{exchange}_{date_str}_{url_id}{ext}"
@@ -1189,9 +1116,14 @@ def _download(url, save_dir, exchange="", date_str="", url_id=""):
     if local.exists():
         return local
     save_dir.mkdir(parents=True, exist_ok=True)
-    r = _req.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
-    r.raise_for_status()
-    local.write_bytes(r.content)
+    async with session.get(
+        url, timeout=aiohttp.ClientTimeout(total=30),
+        headers={"User-Agent": "Mozilla/5.0"},
+    ) as r:
+        r.raise_for_status()
+        tmp = local.with_suffix(local.suffix + ".tmp")
+        tmp.write_bytes(await r.read())
+        tmp.rename(local)
     return local
 
 
@@ -1215,8 +1147,11 @@ def _pdf_to_text(pdf_path):
                         if r.status_code == 200 else "")
         except Exception:
             pass
+    page_count = min(len(doc), 10)
     doc.close()
-    return "\n".join(parts)
+    result = "\n".join(parts)
+    _llm_logger.debug("PDF_PARSED %s: %s pages, %s chars", pdf_path.name, page_count, len(result))
+    return result
 
 
 def _xlsx_to_text(path):
@@ -1236,12 +1171,8 @@ def _xlsx_to_text(path):
         return ""
 
 
-def parse_announcement_fields(
-    html: str, exchange: str, title: str, publish_date: str,
-    page_url: str = "", attachment_dir=None,
-) -> list[dict]:
-    """解析公告提取 minoq/maxoq。含附件检测、PDF 视觉解析。"""
-    import requests as _req2
+def _process_html(html, page_url=""):
+    """同步 HTML 预处理：提取正文 + 附件链接。放 executor 执行。"""
     soup = BeautifulSoup(html, "html.parser")
     for t in soup(["script", "style", "nav", "header", "footer",
                    "noscript", "iframe"]):
@@ -1252,22 +1183,58 @@ def parse_announcement_fields(
         if el:
             body = el
             break
-    text = (body.get_text(separator=" ", strip=True) if body
-            else soup.get_text())
-    text = re.sub(r"\s+", " ", text).strip()
+    text = str(body) if body else soup.get_text()
     for mark in ["第一条", "第一章", "第1条", "第1章",
                  "各会员单位", "各会员"]:
         idx = text.find(mark)
         if idx > 500:
             text = text[idx:]
             break
+    links = _extract_links(html, page_url) if page_url else []
+    return text, links
 
-    # 附件解析
+
+def _pad_eff_date(eff_date: str) -> str:
+    """补位 effective_date: YYYY → YYYYMMDD, YYYYMM → YYYYMMDD.
+    如 eff_date 为空则返回 'YYYYMMDD'."""
+    d = eff_date.strip().replace("-", "")
+    if not d:
+        return "YYYYMMDD"
+    if len(d) >= 8:
+        return d[:8]
+    if len(d) == 6:
+        return f"{d}DD"
+    if len(d) == 4:
+        return f"{d}MMDD"
+    return "YYYYMMDD"
+
+
+async def parse_announcement_fields(
+    text: str, links: list, exchange: str, title: str,
+    publish_date: str, category: str = "",
+    attachment_dir=None, session=None,
+) -> list[dict]:
+    """异步 LLM 调用解析 minoq/maxoq。text 为预处理后的正文。"""
+    # 附件下载
     atext = ""
-    if page_url and attachment_dir:
-        for link in _extract_links(html, page_url):
-            local = _download(link["url"], attachment_dir,
-                             exchange, publish_date, link["url_id"])
+    if links and attachment_dir:
+        for link in links:
+            try:
+                local = await _download(link["url"], attachment_dir,
+                                 exchange, publish_date, link["url_id"],
+                                 session=session)
+            except BaseException as e:
+                _att_failures.append({
+                    "exchange": exchange,
+                    "title": title,
+                    "url": link["url"],
+                    "error": str(e),
+                })
+                _llm_logger.warning(
+                    "附件下载失败 [%s] %s → %s: %s",
+                    exchange, title[:60], link["url"], e, exc_info=True
+                )
+                continue
             if local:
                 try:
                     t = (_pdf_to_text(local) if link["ext"] == ".pdf"
@@ -1276,79 +1243,82 @@ def parse_announcement_fields(
                 except Exception:
                     pass
 
-    full_text = (text[:3000] if atext else text) + atext
-    if len(full_text) > 5000:
-        full_text = full_text[:5000]
+    full_text = text + atext
 
-    prompt = _load_prompt("extract_fields.txt").format(
-        exchange=exchange, publish_date=publish_date, text=full_text
+    prompt = (
+        _load_prompt("extract_fields.txt")
+        + f"\n交易所:{exchange} 发布日期:{publish_date} 类别:{category}"
+        + f"\n\n公告内容:\n\n{full_text}"
     )
 
-    try:
-        r = _req2.post(f"{_DS_BASE}/chat/completions",
-            headers={"Authorization": f"Bearer {_DS_KEY}",
-                     "Content-Type": "application/json"},
-            json={"model": _DS_MODEL,
-                  "messages": [{"role": "user", "content": prompt}],
-                  "temperature": 0, "max_tokens": 1024},
-            timeout=120)
-        r.raise_for_status()
-        raw = r.json()["choices"][0]["message"]["content"]
-    except Exception:
-        return []
+    last_error = None
+    for retry_i in range(5):
+        try:
+            if retry_i > 0:
+                delay = 2 ** retry_i
+                _llm_logger.debug("DS_RETRY [%s] %s: 第 %s/5 次, 等待 %ss", exchange, title[:80], retry_i + 1, delay)
+                await asyncio.sleep(delay)
+            _llm_logger.debug("DS_REQ [%s] %s", exchange, title[:80])
+            async with session.post(
+                f"{_DS_BASE}/chat/completions",
+                headers={"Authorization": f"Bearer {_DS_KEY}",
+                         "Content-Type": "application/json"},
+                json={"model": _DS_MODEL,
+                      "messages": [{"role": "user", "content": prompt}],
+                      "response_format": {"type": "json_object"},
+                      "temperature": 0, "max_tokens": 393216},
+                timeout=aiohttp.ClientTimeout(total=600, connect=30, sock_read=300),
+            ) as r:
+                r.raise_for_status()
+                raw = (await r.json())["choices"][0]["message"]["content"]
+            _llm_logger.info("DS_RAW [%s] %s: %s", exchange, title[:80], raw)
+            break
+        except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
+            last_error = e
+            _llm_logger.warning(
+                "DS_ERR [%s] %s: %s",
+                exchange, title[:80], e
+            )
+        except BaseException as e:
+            _llm_logger.warning(
+                "DS_ERR [%s] %s: %s",
+                exchange, title[:80], e, exc_info=True
+            )
+            raise
+    else:
+        _llm_logger.warning(
+            "DS_ERR [%s] %s: %s",
+            exchange, title[:80], last_error, exc_info=True
+        )
+        raise last_error
 
     raw = raw.strip()
-    raw = raw.removeprefix("```json").removeprefix("```").strip()
-    # 截断到最后一个 ``` 之前
-    idx = raw.rfind("```")
-    if idx > 0:
-        raw = raw[:idx].strip()
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        # 尝试提取 JSON 对象/数组
-        try:
-            m = re.search(r'[{].*[}]', raw, re.DOTALL)
-            if not m:
-                m = re.search(r'[\[].*[\]]', raw, re.DOTALL)
-            if m:
-                data = json.loads(m.group(0))
-            else:
-                return []
-        except Exception:
-            return []
-
+    data = json.loads(raw)
     items = data if isinstance(data, list) else data.get("items", [])
+    needs_review = False if isinstance(data, list) else bool(data.get("needs_review", False))
     results = []
     for item in items:
-        pc = item.get("product_code") or item.get("product", "ALL")
-        field = ""
-        for k in item:
-            kl = k.lower()
-            if any(x in kl for x in ("minoq", "min_qty", "min_open",
-                "min_order", "minopen", "min", "最小")):
-                field = "minoq"
-                break
-            if any(x in kl for x in ("maxoq", "max_qty", "max_open",
-                "max_order", "max", "下单", "order_quantity")):
-                field = "maxoq"
-                break
-        if not field:
+        # 除 effective_date 外全部必填
+        try:
+            pc = item["product_code"]
+            sid = item["security_id"]
+            field = item["field"]
+            val = item["value"]
+            evidence = item["evidence"]
+        except KeyError as e:
+            raise KeyError(
+                f"LLM 输出缺少字段 {e} [{exchange}] {title[:80]}"
+            ) from e
+        if field not in ("minoq", "maxoq"):
             continue
-        val = item.get("value") or 0
-        if not val:
-            for kk, vv in item.items():
-                if vv and isinstance(vv, (int, float)) and vv > 0:
-                    val = int(vv)
-                    break
-        if not isinstance(val, (int, float)) or val <= 0:
-            continue
+        # effective_date: 缺失或不全时用占位字母补位
+        eff_date = _pad_eff_date(item.get("effective_date", ""))
         results.append({
             "product_code": str(pc),
-            "security_id": str(item.get("security_id", "ALL")),
+            "security_id": str(sid),
             "field": field,
             "value": int(val),
-            "effective_date": str(item.get("effective_date", publish_date)),
-            "evidence": str(item.get("evidence", "")),
+            "effective_date": eff_date,
+            "evidence": str(evidence),
         })
-    return results
+    return results, needs_review

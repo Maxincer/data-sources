@@ -33,6 +33,19 @@ _FULL_FIELDS = [
 _FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK", "")
 
 
+def _parse_date_safe(date_str: str):
+    """Parse YYYYMMDD or YYYYMMDD-like string to datetime, return None on failure."""
+    import re as _re
+    if not date_str:
+        return None
+    d = date_str.strip().replace("-", "")
+    d = _re.sub(r'[A-Z]+', lambda m: '01' * (len(m.group()) // 2), d)
+    if len(d) >= 8 and d[:8].isdigit():
+        from datetime import datetime
+        return datetime.strptime(d[:8], "%Y%m%d")
+    return None
+
+
 class Reporter:
     """All pipeline reporting methods."""
     def __init__(self, logger=None):
@@ -72,6 +85,7 @@ class Reporter:
     def generate_daily(
         self, date_str: str, *,
         skip_table_compare: bool = False,
+        skip_wind: bool = False,
         sender: Optional[str] = None,
         email_recipients: Optional[list[str]] = None,
     ) -> None:
@@ -80,6 +94,7 @@ class Reporter:
         Args:
             date_str: 交易日 YYYYMMDD
             skip_table_compare: True=阶段二，跳过两表对比，仅做 WSS 交叉验证
+            skip_wind: True=跳过 Wind WSS 交叉验证（开发/无 cpp_py 环境）
         """
         # 比对库 (旧表 t_futures_info) 配置，通过环境变量传入
         _ref_db = {
@@ -100,6 +115,11 @@ class Reporter:
             self._build_field_stats_section(stats, abnormal),
         ]
 
+        # 公告人工处理提醒
+        review_section = self._build_announcement_review_section(date_str)
+        if review_section:
+            feishu_sections.append(review_section)
+
         # Build comparison results (shared by Feishu and email)
         comparisons: list[tuple[str, dict]] = []
         ours = fetch_table("t_futures_info_exchange", date_str)
@@ -114,14 +134,15 @@ class Reporter:
             ))
 
         # Phase 1b / Phase 2: Wind WSS 交叉验证
-        wind_data = fetch_wind_data(date_str)
-        wind_comp = v.compare_all(date_str, ours, wind_data)
-        title = (
-            "cross-validation: t_futures_info vs wss"
-            if skip_table_compare
-            else "cross-validation: t_futures_info_exchange vs wss"
-        )
-        comparisons.append((title, wind_comp))
+        if not skip_wind:
+            wind_data = fetch_wind_data(date_str)
+            wind_comp = v.compare_all(date_str, ours, wind_data)
+            title = (
+                "cross-validation: t_futures_info vs wss"
+                if skip_table_compare
+                else "cross-validation: t_futures_info_exchange vs wss"
+            )
+            comparisons.append((title, wind_comp))
 
         # Feishu
         for title, comp in comparisons:
@@ -213,6 +234,75 @@ class Reporter:
             print(f"[WARN] Failed to send Feishu message: {e}")
 
     @staticmethod
+    def _build_announcement_review_section(date_str: str) -> str | None:
+        """检查需要人工处理的公告, 返回飞书消息或 None.
+
+        条件:
+          1. needs_review = 1
+          2. publish_date <= today <= effective_date + 7 days (或 effective_date 为空时取 publish_date)
+        """
+        import csv
+        from datetime import datetime, timedelta
+
+        csv_path = (
+            Path(os.environ.get("DATA_DIR", "./data"))
+            / "fields_from_announcements.csv"
+        )
+        if not csv_path.exists():
+            return None
+
+        today = datetime.strptime(date_str, "%Y%m%d")
+        review_items: list[dict] = []
+
+        with open(csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if str(row.get("needs_review", "")).strip() != "1":
+                    continue
+                pd_str = row.get("publish_date", "").strip()
+                eff_str = row.get("effective_date", "").strip()
+                # effective_date 含占位字母时取 publish_date 作为窗口起点
+                window_start = _parse_date_safe(eff_str) or _parse_date_safe(pd_str)
+                if not window_start:
+                    continue
+                window_end = window_start + timedelta(days=7)
+                if not (window_start <= today <= window_end):
+                    continue
+                review_items.append({
+                    "title": row.get("announcement_title", ""),
+                    "url": row.get("page_url", ""),
+                    "exchange": row.get("exchange", ""),
+                    "publish_date": pd_str,
+                    "effective_date": eff_str,
+                })
+
+        if not review_items:
+            return None
+
+        # 去重 (同一公告可能多行, 按 url 去重)
+        seen_urls = set()
+        unique_items = []
+        for item in review_items:
+            url = item["url"]
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                unique_items.append(item)
+
+        lines = [
+            "**🔔 需人工处理的公告 (生效后一周内)**",
+            "",
+        ]
+        for item in unique_items[:20]:
+            ex = item["exchange"]
+            title = item["title"][:80]
+            url = item["url"]
+            eff = item["effective_date"]
+            lines.append(f"- [{ex}] [{title}]({url}) 生效: {eff}")
+        if len(unique_items) > 20:
+            lines.append(f"  ... 还有 {len(unique_items) - 20} 条")
+        return "\n".join(lines)
+
+    @staticmethod
     def _build_file_size_section(date_str: str) -> str:
         """Section 1: file size changes from metadata."""
         metadata_file = Path(os.environ.get("DATA_DIR", "./data")) / "raw" / ".metadata.jsonl"
@@ -275,7 +365,7 @@ class Reporter:
 
             if ex in abnormal and abnormal[ex]:
                 lines.append("")
-                lines.append("异常空值明细 (按金额降序, 最多10条):")
+                lines.append("异常空值明细 (按金额降序, 最多20条):")
                 lines.append("| 合约 | 空值字段 | amt | 判定 |")
                 lines.append("| :--- | :--- | ---: | :--- |")
                 for rec in abnormal[ex]:
@@ -365,14 +455,13 @@ class Reporter:
         if fs:
             lines.append("**字段差异汇总**:")
             lines.append("")
-            lines.append("| 字段 | 匹配 | 差异 | 缺a | 缺b |")
+            lines.append("| 字段 | 匹配 | 差异 | a缺 | b缺 |")
             lines.append("| :--- | ---: | ---: | ---: | ---: |")
             for fname in _FULL_FIELDS:
                 s = fs.get(fname, {})
-                if s.get("diff", 0) == 0 and s.get("missing_a", 0) == 0 and s.get("missing_b", 0) == 0:
-                    continue
+                icon = "✅" if s.get("diff", 0) == 0 and s.get("missing_a", 0) == 0 and s.get("missing_b", 0) == 0 else ""
                 lines.append(
-                    f"| {fname} | {s.get('matched',0)} | {s.get('diff',0)} | "
+                    f"| {icon}{fname} | {s.get('matched',0)} | {s.get('diff',0)} | "
                     f"{s.get('missing_a',0)} | {s.get('missing_b',0)} |"
                 )
             lines.append("")
@@ -407,6 +496,20 @@ class Reporter:
                 missing_a = s.get("sample_missing_in_original", [])
                 total = diff_count + len(missing_a) + len(missing_b)
                 lines.append(f"  **{ex} {field}** (共{total}条):")
+
+                # if_basis: 差异极小 (<0.001) 时只显示条数, 不逐条列示
+                if field == "if_basis":
+                    tiny_diffs = [
+                        sd for sd in samples
+                        if isinstance(sd.get('a-b'), (int, float))
+                        and abs(sd['a-b']) < 0.001
+                    ]
+                    if tiny_diffs and len(tiny_diffs) == len(samples) and not missing_a and not missing_b:
+                        lines.append(
+                            f"    {len(tiny_diffs)} 条差异均 < 0.001 (可忽略)"
+                        )
+                        continue
+
                 for sd in samples[:limit]:
                     a_b = sd.get('a-b', '—')
                     ratio = sd.get('ratio', '-')
@@ -607,6 +710,20 @@ class Reporter:
                     missing_b = s.get("sample_missing_in_new", [])
                     missing_a = s.get("sample_missing_in_original", [])
                     parts.append(f'<p><b>{ex} {field}</b></p>')
+                    
+                    # if_basis: 差异极小 (<0.001) 时只显示条数, 不逐条列示
+                    if field == "if_basis":
+                        tiny_diffs = [
+                            sd for sd in samples
+                            if isinstance(sd.get('a-b'), (int, float))
+                            and abs(sd['a-b']) < 0.001
+                        ]
+                        if tiny_diffs and len(tiny_diffs) == len(samples) and not missing_a and not missing_b:
+                            parts.append(
+                                f'<ul><li>{len(tiny_diffs)} 条差异均 &lt; 0.001 (可忽略)</li></ul>'
+                            )
+                            continue
+
                     parts.append('<ul>')
                     for sd in samples[:limit]:
                         a_b = sd.get('a-b', '—')
@@ -682,6 +799,10 @@ def main():
         "--skip-table-compare", action="store_true",
         help="Skip comparison with Wind original table (phase 2 only)",
     )
+    parser.add_argument(
+        "--skip-wind", action="store_true",
+        help="Skip Wind WSS cross-validation (dev / no cpp_py)",
+    )
     args = parser.parse_args()
 
     date_str = (
@@ -698,6 +819,7 @@ def main():
     r.generate_daily(
         date_str,
         skip_table_compare=args.skip_table_compare,
+        skip_wind=args.skip_wind,
         sender=args.sender,
         email_recipients=recipients,
     )

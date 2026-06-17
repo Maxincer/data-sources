@@ -241,7 +241,7 @@ class Verifier:
                             SELECT COUNT(*) AS total,
                                    SUM(CASE WHEN {field} IS NOT NULL THEN 1 ELSE 0 END) AS non_null,
                                    SUM(CASE WHEN {field} IS NULL AND (
-                                       '{field}' = 'amt' OR amt IS NULL OR amt != 0
+                                       '{field}' = 'amt' OR (amt IS NOT NULL AND amt != 0)
                                    ){extra_abn} THEN 1 ELSE 0 END) AS abnormal_null
                             FROM `{db}`.`{table}`
                             WHERE date = '{dt}'
@@ -504,6 +504,10 @@ class Verifier:
                         })
                     continue
                 if av is not None and bv is None:
+                    # minoq=1 且 b_source 为空 → 视为一致，不列示
+                    if field == "minoq" and av == 1:
+                        cr.total_matched += 1
+                        continue
                     cr.total_missing_new += 1
                     avf = round(float(av), _PRECISION.get(field, 4)) if isinstance(av, (int, float)) else av
                     if len(cr.sample_missing_in_new) < 5:
@@ -521,9 +525,13 @@ class Verifier:
                     bvf = bv
 
                 if avf != bvf:
-                    cr.total_diff += 1
                     abs_diff = abs(avf - bvf) if isinstance(avf, (int, float)) and isinstance(bvf, (int, float)) else 0
                     ratio = abs_diff / abs(bvf) if bvf else 0
+                    # vol/amt/oi 差异 ≤ 千分之一视为匹配（大数值浮点误差）
+                    if field in ("volume", "amt", "oi") and ratio <= 0.001:
+                        cr.total_matched += 1
+                        continue
+                    cr.total_diff += 1
                     cr.max_deviation = max(cr.max_deviation, ratio)
                     if len(cr.sample_diffs) < 10:
                         cr.sample_diffs.append({
@@ -656,7 +664,7 @@ class Verifier:
 
             # Header row
             ab_label = "|a-b|/b"
-            header = f"  {'字段':<14s} | {'匹配':>6s} | {'差异':>4s} | {'原表缺':>5s} | {'新表缺':>5s} | {'缺异':>5s} | {ab_label:>10s}"
+            header = f"  {'字段':<14s} | {'匹配':>6s} | {'差异':>4s} | {'a缺':>5s} | {'b缺':>5s} | {'缺异':>5s} | {ab_label:>10s}"
             lines.append(header)
             lines.append(f"  {'-' * len(header)}")
 

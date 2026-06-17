@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Writer: parse raw data and upsert into MySQL."""
-
 import argparse
-import logging
-import os
 import csv
+import json
+import os
+from pathlib import Path
+import re
 
 from mxz_utils.logging_config import get_logger
 
@@ -19,26 +19,170 @@ from data_sources.trade_date import prev_trading_date
 from data_sources.db import upsert_rows, delete_rows
 
 
-RAW_DIR = Path(os.environ.get("DATA_DIR", "./data")) / "raw"
+RAW_DIR = Path(os.environ["DATA_DIR"]) / "raw" / "structured"
 
 logger = get_logger(
-    "data_sources.writer", logging.DEBUG, os.environ.get("LOG_DIR", "./logs"), "Writer",
+    "Writer", 'DEBUG', os.environ["LOG_DIR"], "Writer",
 )
 
-
-
-# ═══════════════════════════════════════════
-#  数据合并: 从外部 CSV 注入 minoq/maxoq
-# ═══════════════════════════════════════════
-
-# 10. 下单量 (minoq/maxoq) 静态注入
-# ===================================================================
 
 # exchange suffix → config exchange name
 _SUFFIX_TO_EXCHANGE = {
     ".DCE": "DCE", ".CZC": "CZCE", ".SHF": "SHFE",
     ".INE": "INE", ".GFE": "GFEX", ".CFE": "CFFEX",
 }
+
+
+def _parse_eff_date_sort(eff: str) -> int:
+    """effective_date → 排序键.
+    '20260415' → 20260415, '2026MMDD' → 20260101, '' → 0
+    """
+    d = eff.strip().replace("-", "")
+    if not d:
+        return 0
+    d = re.sub(r'[A-Z]+', lambda m: '01' * (len(m.group()) // 2), d)
+    return int(d) if d.isdigit() else 0
+
+
+def _extract_variety(contract_code: str) -> str:
+    """合约代码 → 品种代码.
+    'CU2507' → 'CU', 'PP2509-F' → 'PP', 'M2601' → 'M'.
+    """
+    # 去掉后缀 (如 -F 月均价, -P 等)
+    base = re.sub(r'-[A-Z]\d*$', '', contract_code, flags=re.IGNORECASE)
+    return "".join(c for c in base if c.isalpha()).upper()
+
+
+class OrderLimitBook:
+    """从 fields_from_announcements.csv + announcements_metadata.json 构建.
+
+    三级规则:
+      daily   (日常公告调整)  — 最高优先级
+      product (品种业务细则)
+      general (交易所规则)    — 最低优先级
+    """
+
+    LEVELS = ("daily", "product", "general")
+
+    def __init__(self):
+        # rules[level]: [(sort_key, exchange, product_code, security_id, field, value), ...]
+        self._rules: dict[str, list[tuple]] = {lv: [] for lv in self.LEVELS}
+        self._loaded = False
+
+    def load(self, csv_path, meta_path):
+        if self._loaded:
+            return
+
+        # 加载 metadata: aid → category
+        aid_cat: dict[str, str] = {}
+        if meta_path.exists():
+            with open(meta_path, encoding="utf-8") as f:
+                meta = json.load(f)
+            for aid, entry in meta.items():
+                cat = entry.get("category", "").strip().lower()
+                if cat in self.LEVELS:
+                    aid_cat[aid] = cat
+
+        if csv_path.exists():
+            with open(csv_path, encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    ex = row.get("exchange", "").strip()
+                    pc = row.get("product_code", "").strip().upper()
+                    field = row.get("field", "").strip()
+                    val = row.get("value", "").strip()
+                    sid = row.get("security_id", "").strip()
+                    eff = row.get("effective_date", "").strip()
+                    aid = row.get("announcement_id", "").strip()
+                    if not ex or not pc or field not in ("minoq", "maxoq") or not val:
+                        continue
+                    try:
+                        val = int(val)
+                    except ValueError:
+                        continue
+                    sort_key = _parse_eff_date_sort(eff)
+                    cat = aid_cat.get(aid, "daily")  # 默认 daily (最保守)
+                    self._rules[cat].append(
+                        (sort_key, ex, pc, sid, field, val)
+                    )
+        else:
+            logger.warning("fields_from_announcements.csv 不存在: %s", csv_path)
+
+        # 各 level 内按 effective_date 升序
+        for lv in self.LEVELS:
+            self._rules[lv].sort(key=lambda r: r[0])
+
+        self._loaded = True
+        logger.info(
+            "OrderLimitBook: 加载 daily=%s product=%s general=%s",
+            len(self._rules["daily"]),
+            len(self._rules["product"]),
+            len(self._rules["general"]),
+        )
+
+    def _best_for_level(self, level: str, exchange: str,
+                        variety_id: str, contract_code: str) -> dict:
+        """在指定 level 中按 effective_date 累积应用规则, 返回最新 minoq/maxoq."""
+        result = {"minoq": None, "maxoq": None}
+        for _, ex, pc, sid, field, val in self._rules[level]:
+            if ex != exchange:
+                continue
+            # 品种匹配: 具体品种 或 通配
+            if pc != variety_id and pc != "ALL":
+                continue
+            # 合约匹配: 具体合约 或 通配
+            if sid != "ALL" and sid != contract_code:
+                continue
+            if field == "minoq":
+                result["minoq"] = val
+            elif field == "maxoq":
+                result["maxoq"] = val
+        return result
+
+    def get(self, exchange: str, contract_code: str) -> dict:
+        """按优先级 (daily > product > general) 取最新 minoq/maxoq.
+        返回: {"minoq": int|None, "maxoq": int|None}
+        """
+        variety_id = _extract_variety(contract_code)
+        result = {"minoq": None, "maxoq": None}
+        for lv in self.LEVELS:
+            lv_result = self._best_for_level(lv, exchange, variety_id, contract_code)
+            for fld in ("minoq", "maxoq"):
+                if result[fld] is None and lv_result[fld] is not None:
+                    result[fld] = lv_result[fld]
+        return result
+
+
+_book: OrderLimitBook | None = None
+
+
+def _get_book() -> OrderLimitBook:
+    global _book
+    if _book is None:
+        _book = OrderLimitBook()
+        data_dir = Path(os.environ.get("DATA_DIR", "./data"))
+        csv_path = data_dir / "fields_from_announcements.csv"
+        meta_path = data_dir / "raw" / "announcements" / "announcements_metadata.json"
+        _book.load(csv_path, meta_path)
+    return _book
+
+
+def inject_order_limits(records: list) -> list:
+    """对缺少 minoq/maxoq 的记录, 从 fields_from_announcements.csv 注入."""
+    book = _get_book()
+    for rec in records:
+        code = rec.get("code", "")
+        suffix = "." + code.split(".")[-1] if "." in code else ""
+        exchange = _SUFFIX_TO_EXCHANGE.get(suffix)
+        if exchange is None:
+            continue
+        raw = code.split(".")[0]
+        limits = book.get(exchange, raw.upper())
+        if "minoq" not in rec and limits["minoq"] is not None:
+            rec["minoq"] = limits["minoq"]
+        if "maxoq" not in rec and limits["maxoq"] is not None:
+            rec["maxoq"] = limits["maxoq"]
+    return records
 
 
 def _apply_modifiers(records):
@@ -95,8 +239,8 @@ def _prev_trading_day(date_str: str) -> str:
     return prev_trading_date(date_str) or date_str
 
 
-def _ensure_prev_dce_data(date_str: str):
-    """确保前一交易日的 DCE 数据存在，缺失则下载。"""
+def _check_prev_dce_data(date_str: str):
+    """检查前一交易日的 DCE 数据是否存在，缺失则报错中断。"""
     prev_date = _prev_trading_day(date_str)
     needed = [
         f"{prev_date}.DCE.TradingParameters.json",
@@ -104,36 +248,18 @@ def _ensure_prev_dce_data(date_str: str):
         f"{prev_date}.DCE.SettlementParameters.json",
     ]
     missing = [f for f in needed if not (RAW_DIR / f).exists()]
-    if not missing:
-        return
-
-    logger.info("DCE 缺失前一交易日数据，正在下载 %s...", prev_date)
-    try:
-        from data_sources.fetcher import (
-            fetch_dce_tradepara, fetch_dce_settlement,
+    if missing:
+        raise FileNotFoundError(
+            f"缺失前一交易日 ({prev_date}) DCE 数据: {missing}. "
+            f"请先运行 Fetcher: python -m data_sources.fetcher run {prev_date}"
         )
-        funcs = {
-            "TradingParameters": fetch_dce_tradepara,
-            "SettlementParameters": fetch_dce_settlement,
-        }
-        for fname in missing:
-            for suffix, func in funcs.items():
-                if suffix in fname:
-                    ok = func(prev_date)
-                    if ok:
-                        logger.info("  ✅ %s", fname)
-                    else:
-                        logger.warning("  ⚠ %s 下载失败", fname)
-                    break
-    except Exception as e:
-        logger.warning("下载失败: %s", e)
 
 
 def write_trade_date(date_str: str, table: str,
                       dry_run: bool = False,
                       config_override: dict | None = None):
     """Parse and write data for a specific trade date."""
-    _ensure_prev_dce_data(date_str)
+    _check_prev_dce_data(date_str)
     prev_date = _prev_trading_day(date_str)
     logger.info("写入日期: %s (前日: %s)", date_str, prev_date)
 
@@ -221,18 +347,14 @@ def main():
         args.date, args.table, args.dry_run, config_override
     )
 
-    action = "[DRY RUN]" if args.dry_run else ""
-    print(f"{action} Records written: {written}")
-    for s in stats:
-        missing = ", ".join(
-            [f"{k}:{v}" for k, v in s.get("missing", {}).items() if v > 0]
-        )
-        print(
-            f"  {s['exchange']:10s} {s['data_type']:20s} "
-            f"total={s['total_records']:5d} "
-            f"err={s['errors']} "
-            + (f"missing=[{missing}]" if missing else "")
-        )
+    action = "[DRY RUN] " if args.dry_run else ""
+    total_records = sum(s["total_records"] for s in stats)
+    total_errors = sum(s["errors"] for s in stats)
+    print(
+        f"{action}解析 {total_records} 条"
+        f" | 写入 {written} 条"
+        + (f" | {total_errors} errors" if total_errors else "")
+    )
 
 
 if __name__ == "__main__":

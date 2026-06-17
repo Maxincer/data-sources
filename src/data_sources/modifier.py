@@ -13,6 +13,10 @@ import re
 from datetime import date
 from typing import Dict, List, Optional
 
+import logging
+
+_logger = logging.getLogger(__name__)
+
 
 # ===================================================================
 # 0. 浮点安全的取整工具
@@ -600,7 +604,7 @@ def _pct_val(val: str) -> float | None:
         return None
 
 
-RAW_DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")) / "raw"
+RAW_DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")) / "raw" / "structured"
 
 
 def fill_cffex_margin_from_history(records: list) -> list:
@@ -666,44 +670,71 @@ def fill_cffex_margin_from_history(records: list) -> list:
 # 13. CFFEX 基差（if_basis）计算
 # ===================================================================
 
-# 股指期货 → 对应现货指数
+# 股指期货 → 对应现货指数 (tushare ts_code)
 _CFFEX_INDEX_MAP = {
-    "IF": "000300",  # 沪深300
-    "IC": "000905",  # 中证500
-    "IH": "000016",  # 上证50
-    "IM": "000852",  # 中证1000
+    "IF": "000300.SH",  # 沪深300
+    "IC": "000905.SH",  # 中证500
+    "IH": "000016.SH",  # 上证50
+    "IM": "000852.SH",  # 中证1000
 }
 
 
 def fill_if_basis(records: list) -> list:
-    """计算 CFFEX 股指期货的基差: if_basis = close - index_close.
+    """计算 CFFEX 股指期货基差: if_basis = close - 现货指数收盘价.
 
-    从 records 中查找对应 CSI 指数的 close 值，与 CFFEX 合约的
-    close 做差。国债期货（T/TF/TL/TS）无对应指数，跳过。
+    从 raw/structured/{trade_date}.TS.IndexClose.json（Fetcher 产出）读取
+    tushare 指数收盘价；每条 record 按其自身 trade_date 匹配对应文件。
+    若无文件，不计算基差。
     """
-    # 构建 index_code → close 查找表
-    index_close: dict[str, float] = {}
-    for rec in records:
-        code = rec.get("code", "")
-        if not code.endswith(".CSI"):
-            continue
-        c = rec.get("close")
-        if c is not None:
-            index_close[code.split(".")[0]] = float(c)
+    import json
 
-    if not index_close:
+    # 收集所有 CFFEX 交易日期
+    cffe_dates = set()
+    for rec in records:
+        if rec.get("code", "").endswith(".CFE"):
+            d = (rec.get("date", "") or "").replace("-", "")
+            if d:
+                cffe_dates.add(d)
+
+    if not cffe_dates:
+        return records
+
+    # 按日期加载 IndexClose.json → {date: {product: index_close}}
+    ts_to_prod = {v: k for k, v in _CFFEX_INDEX_MAP.items()}
+    index_close_by_date: dict[str, dict[str, float]] = {}
+    for d in cffe_dates:
+        json_path = RAW_DATA_DIR / f"{d}.TS.IndexClose.json"
+        if not json_path.exists():
+            continue
+        try:
+            with open(json_path, encoding="utf-8") as f:
+                items = json.load(f)
+            close_map: dict[str, float] = {}
+            for item in items:
+                prod = ts_to_prod.get(item.get("ts_code", ""))
+                if prod and item.get("close") is not None:
+                    close_map[prod] = float(item["close"])
+            if close_map:
+                index_close_by_date[d] = close_map
+        except Exception as e:
+            _logger.warning(
+                "读取 %s 失败: %s", json_path.name, e
+            )
+
+    if not index_close_by_date:
         return records
 
     for rec in records:
         code = rec.get("code", "")
         if not code.endswith(".CFE"):
             continue
-        raw = code.split(".")[0]
-        product = "".join(c for c in raw if c.isalpha())
-        index_code = _CFFEX_INDEX_MAP.get(product)
-        if index_code is None:
-            continue  # 国债期货，无对应指数
-        ic = index_close.get(index_code)
+        d = (rec.get("date", "") or "").replace("-", "")
+        close_map = index_close_by_date.get(d)
+        if not close_map:
+            continue
+        raw_c = code.split(".")[0]
+        product = "".join(c for c in raw_c if c.isalpha())
+        ic = close_map.get(product)
         c = rec.get("close")
         if ic is not None and c is not None:
             rec["if_basis"] = round(float(c) - ic, 4)

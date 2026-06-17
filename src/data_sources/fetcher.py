@@ -24,7 +24,7 @@ from data_sources.verifier import Verifier
 from data_sources.reporter import Reporter
 from data_sources.configs import build_task_configs, DCE_BASE_URL
 
-RAW_DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")) / "raw"
+RAW_DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")) / "raw" / "structured"
 RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
 METADATA_FILE = RAW_DATA_DIR / ".metadata.jsonl"
 def _dce_credentials():
@@ -595,22 +595,38 @@ class Fetcher:
     # -----------------------------------------------------------------
 
     def _get_dce_token(self) -> Optional[str]:
-        """Retrieve a valid Bearer token for the DCE API."""
+        """Retrieve a valid Bearer token for the DCE API, with caching."""
+        now = time.time()
+        cache = getattr(self, "_dce_token_cache", None)
+        if cache and now < cache["expiry"]:
+            return cache["token"]
+
         try:
             url = f"{DCE_BASE_URL}/dceapi/cms/auth/accessToken"
-            headers = {"apikey": _dce_credentials()[0]}
-            payload = {"secret": _dce_credentials()[1]}
+            apikey, secret = _dce_credentials()
+            headers = {
+                "apikey": apikey,
+                "Content-Type": "application/json",
+                "User-Agent": self.fake_headers["User-Agent"],
+            }
+            payload = {"secret": secret}
             resp = requests.post(
                 url, headers=headers, json=payload, timeout=15
             )
-            resp.raise_for_status()
             data = resp.json()
             if data.get("success"):
                 token = data["data"]["token"]
+                # Cache for 30 minutes (DCE tokens usually expire in 8h)
+                self._dce_token_cache = {
+                    "token": token,
+                    "expiry": now + 1800,
+                }
                 self.logger.info("DCE token obtained successfully")
+                time.sleep(1)  # throttle to avoid WAF rate-limit
                 return token
             self.logger.error(
-                "DCE token request failed: %s", data.get("msg")
+                "DCE token request failed: %s (HTTP %s)",
+                data.get("msg"), resp.status_code,
             )
             return None
         except Exception as e:
@@ -766,6 +782,40 @@ class Fetcher:
             )
             return {"success": False, "error": str(e)}
 
+    def _fetch_dce_tradingparam(self, task: Task) -> Dict:
+        """Fetch DCE product-level tradingParam (maxHand)."""
+        token = self._get_dce_token()
+        if not token:
+            return {"success": False, "error": "Token acquisition failed"}
+        try:
+            headers = {
+                "apikey": _dce_credentials()[0],
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            }
+            resp = requests.post(
+                task.url,
+                headers=headers,
+                json={"varietyId": "all"},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if not data.get("success") or "data" not in data:
+                raise ValueError(f"API error: {data.get('msg')}")
+            content = json.dumps(data, ensure_ascii=False).encode("utf-8")
+            self._save_and_record(content, task)
+            self.logger.info(
+                "DCE product tradingParam fetched, %d products",
+                len(data["data"]),
+            )
+            return {"success": True}
+        except Exception as e:
+            self.logger.error(
+                "DCE product tradingParam fetch failed: %s", e, exc_info=True,
+            )
+            return {"success": False, "error": str(e)}
+
     # -----------------------------------------------------------------
     # GFEX trading parameters (simple POST JSON)
     # -----------------------------------------------------------------
@@ -895,6 +945,79 @@ class Fetcher:
                 "CSI market fetch failed: %s", e, exc_info=True
             )
             return {"success": False, "error": str(e)}
+
+    # -----------------------------------------------------------------
+    # Tushare index close data
+    # -----------------------------------------------------------------
+
+    def _fetch_ts_index_close(self, task: Task) -> Dict:
+        """
+        Fetch spot index closing data from Tushare.
+        Indices: 000016.SH (IH/sup50), 000300.SH (IF/HS300),
+                 000905.SH (IC/zz500), 000852.SH (IM/zz1000).
+
+        Tushare's index_daily API only accepts one ts_code per call,
+        so we query each index individually and combine into an array.
+        Output is a raw JSON array (no envelope), consistent with
+        other fetcher raw data.
+        """
+        import tushare as ts
+
+        token = os.environ.get("TUSHARE_TOKEN")
+        if not token:
+            return {"success": False, "error": "TUSHARE_TOKEN not set"}
+        ts.set_token(token)
+        pro = ts.pro_api()
+
+        trade_date = task.trade_date
+        ts_codes_and_names = [
+            ("000016.SH", "上证50"),
+            ("000300.SH", "沪深300"),
+            ("000905.SH", "中证500"),
+            ("000852.SH", "中证1000"),
+        ]
+
+        records = []
+        for ts_code, name in ts_codes_and_names:
+            try:
+                df = pro.index_daily(
+                    ts_code=ts_code,
+                    start_date=trade_date,
+                    end_date=trade_date,
+                )
+            except Exception as e:
+                self.logger.warning(
+                    "TS %s (%s) failed: %s", name, ts_code, e
+                )
+                continue
+
+            if df is not None and not df.empty:
+                rec = json.loads(
+                    df.to_json(orient="records", force_ascii=False)
+                )[0]
+                records.append(rec)
+
+        if not records:
+            self.logger.info(
+                "TS IndexClose: no data for %s (holiday?)", trade_date
+            )
+            return {"success": True, "no_data": True}
+
+        content = json.dumps(records, ensure_ascii=False).encode("utf-8")
+
+        prev_size = self.verifier.get_previous_size(task)
+        passed, reason = self.verifier.verify_response(content, prev_size)
+        if not passed:
+            raise ValueError(f"Verification failed: {reason}")
+
+        task.status_code = 200
+        self._save_and_record(content, task)
+
+        self.logger.info(
+            "TS IndexClose fetched for %s: %d records",
+            trade_date, len(records),
+        )
+        return {"success": True}
 
     # -----------------------------------------------------------------
     # Retry logic
@@ -1226,6 +1349,45 @@ def fetch_dce_settlement(date_str: str) -> bool:
     return _fetch_dce_single(
         date_str, "dce_settlement", "_fetch_dce_settlement", "dce_settlement"
     )
+
+
+def fetch_ts_index_close(date_str: str) -> bool:
+    """
+    按指定日期下载 Tushare 现货指数收盘行情。
+    Indices: 000016.SH (IH/上证50), 000300.SH (IF/沪深300),
+             000905.SH (IC/中证500), 000852.SH (IM/中证1000)。
+
+    保存格式: data/raw/structured/{date_str}.TS.IndexClose.json
+
+    Args:
+        date_str: YYYYMMDD 格式日期
+
+    Returns:
+        True 表示下载成功，False 表示失败
+
+    Usage:
+        from data_sources.fetcher import fetch_ts_index_close
+        fetch_ts_index_close("20260616")
+    """
+    fetcher = Fetcher()
+    task = Task(
+        exchange="TS",
+        suffix="json",
+        description="IndexClose",
+        url="tushare://index_daily",
+        trade_date=date_str,
+    )
+    result = fetcher._fetch_ts_index_close(task)  # pylint: disable=protected-access
+    if result.get("success"):
+        fetcher.logger.info(
+            "fetch_ts_index_close: successfully downloaded %s", date_str
+        )
+        return True
+    fetcher.logger.error(
+        "fetch_ts_index_close: failed for %s: %s",
+        date_str, result.get("error"),
+    )
+    return False
 
 
 if __name__ == "__main__":
