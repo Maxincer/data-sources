@@ -1059,7 +1059,9 @@ class Fetcher:
     # SHFE / INE Product Config (Playwright-based HTML download)
     # -----------------------------------------------------------------
 
-    PRODUCT_CONFIG_DIR = RAW_DATA_DIR / "product_configs"
+    PRODUCT_CONFIG_DIR = (
+        Path(os.environ.get("DATA_DIR", "./data")) / "raw" / "product_configs"
+    )
 
     def _fetch_exchange_product_config(self, task: Task) -> Dict:
         """Download SHFE/INE product specification HTMLs via Playwright.
@@ -1157,7 +1159,7 @@ class Fetcher:
                     save_path.write_text(page_html, encoding="utf-8")
                     self.logger.info(
                         "    ✓ %s (%d bytes)",
-                        save_name, len(page_html),
+                        save_path, len(page_html),
                     )
                     success_count += 1
                     time.sleep(1)

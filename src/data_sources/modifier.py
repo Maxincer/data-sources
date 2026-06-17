@@ -40,16 +40,6 @@ def safe_floor(value: float, tick: float) -> float:
 # ===================================================================
 
 # CZCE 代码 3→4 位转换
-CZCE_TICK_SIZE = {
-    "AP": 1.0, "CF": 5.0, "CJ": 1.0, "CY": 5.0, "FG": 1.0,
-    "JR": 1.0, "MA": 1.0, "OI": 1.0, "PF": 2.0, "PK": 2.0,
-    "PL": 1.0, "PM": 1.0, "PX": 2.0,
-    "RI": 1.0, "RM": 1.0, "RS": 1.0,
-    "SA": 1.0, "SF": 2.0, "SH": 1.0, "SM": 2.0, "SR": 1.0,
-    "TA": 2.0, "UR": 1.0, "WH": 1.0, "ZC": 0.2, "PR": 1.0,
-}
-
-
 def pad_czce_code(raw_code: str, ref_date: date = None) -> str:
     """CZCE 3-digit to 4-digit: ZC605 -> ZC2605, ZC605.CZC -> ZC2605.CZC.
 
@@ -126,6 +116,40 @@ SHFE_PRODUCTS = {"CU", "AL", "ZN", "PB", "NI", "SN", "AU", "AG", "RB", "WR",
 # INE 产品代码
 INE_PRODUCTS = {"SC", "BC", "LU", "NR", "EC"}
 
+# {产品代码: "SHF"|"INE"}, 由 parser._load_product_tick_map() 填充
+_PRODUCT_EXCHANGE_MAP: Dict[str, str] = {}
+
+
+def _set_product_exchange_map(mapping: Dict[str, str]) -> None:
+    """由 parser 在加载 product_configs 后调用，设置交易所归属映射。"""
+    _PRODUCT_EXCHANGE_MAP.update(mapping)
+
+
+def _ensure_exchange_map() -> Dict[str, str]:
+    """惰性加载 product_configs 交易所映射。"""
+    if not _PRODUCT_EXCHANGE_MAP:
+        from data_sources.parser import _load_product_tick_map
+        _load_product_tick_map()
+    return _PRODUCT_EXCHANGE_MAP
+
+
+def _is_shfe_product(pgid: str) -> bool:
+    """判断品种代码是否属于 SHFE。
+
+    基于 product_configs 文件名 + INE 优先规则动态判定，
+    无需维护静态产品列表。
+    """
+    return _ensure_exchange_map().get(pgid.lower()) == "SHF"
+
+
+def _is_ine_product(pgid: str) -> bool:
+    """判断品种代码是否属于 INE。
+
+    基于 product_configs 文件名 + INE 优先规则动态判定，
+    无需维护静态产品列表。
+    """
+    return _ensure_exchange_map().get(pgid.lower()) == "INE"
+
 
 def is_subtotal_row(code_or_name: str) -> bool:
     """判断是否为 小计/合计 等汇总行"""
@@ -195,10 +219,9 @@ def should_filter_cffex_code(code: str) -> bool:
 
 def should_filter_shfe_ine_product(pgid: str, exchange_code: str) -> bool:
     """SHFE: 排除 INE 产品; INE: 排除 SHFE 产品"""
-    pgid_up = pgid.upper()
-    if exchange_code == "SHF" and pgid_up in INE_PRODUCTS:
+    if exchange_code == "SHF" and _is_ine_product(pgid):
         return True
-    if exchange_code == "INE" and pgid_up in SHFE_PRODUCTS:
+    if exchange_code == "INE" and _is_shfe_product(pgid):
         return True
     return False
 
@@ -520,33 +543,6 @@ def fill_zero_volume_close(records: list) -> list:
         if rec.get("close") is None and rec.get("settle") is not None:
             rec["close"] = rec["settle"]
     return records
-
-
-# ===================================================================
-# 11. 涨跌停板计算的取整规则
-# ===================================================================
-
-
-def calc_czce_limit_prices(pre_settle: float, limit_pct: float,
-                           tick_size: Optional[float] = None,
-                           code: str = "") -> tuple:
-    """CZCE 涨停价/跌停价计算与取整
-
-    涨停价: 向上取整至 tick 整数倍
-    跌停价: 向下取整至 tick 整数倍
-    """
-    if tick_size is None:
-        product = "".join(c for c in code.split(".")[0] if c.isalpha())
-        tick_size = CZCE_TICK_SIZE.get(product)
-    raw_up = pre_settle * (1 + limit_pct)
-    raw_down = pre_settle * (1 - limit_pct)
-    if tick_size:
-        maxup = round(safe_ceil(raw_up, tick_size), 2)
-        maxdown = round(safe_floor(raw_down, tick_size), 2)
-    else:
-        maxup = round(raw_up, 2)
-        maxdown = round(raw_down, 2)
-    return maxup, maxdown
 
 
 from decimal import Decimal, ROUND_DOWN

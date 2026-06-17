@@ -26,21 +26,22 @@ from data_sources.modifier import (
     safe_floor,
     calc_shfe_ine_limit_prices,
     zero_price_to_none,
+    _set_product_exchange_map,
+    _is_shfe_product,
+    _is_ine_product,
 )
-
-# Exchange product sets for cross-exchange filtering
-SHFE_PRODUCTS = {"CU","AL","ZN","PB","NI","SN","AU","AG","RB","WR",
-                 "HC","SS","FU","BU","BR","RU","SP","OP","AD","AO"}
-INE_PRODUCTS = {"SC","BC","LU","NR","EC"}
-
 
 RAW_DIR = Path(os.environ["DATA_DIR"]) / "raw" / "structured"
 
 # Exchange code suffixes for DB
 SUFFIX_MAP = {
-    "CFE": ".CFE", "SHF": ".SHF", "CZC": ".CZC",
-    "DCE": ".DCE", "GFE": ".GFE", "INE": ".INE",
+    "CFE": ".CFE",
     "CSI": ".CSI",
+    "CZC": ".CZC",
+    "DCE": ".DCE",
+    "GFE": ".GFE",
+    "INE": ".INE",
+    "SHF": ".SHF",
 }
 
 # DB columns in order
@@ -292,9 +293,9 @@ def _parse_shfe_ine_daily(fpath: Path) -> List[Dict]:
         if pgid_up.endswith("_TAS"):
             pgid_up = pgid_up.replace("_TAS", "")
             dmonth = dmonth + "TAS"
-        if pgid_up in INE_PRODUCTS and exchange_code == "SHF":
+        if _is_ine_product(pgid_up) and exchange_code == "SHF":
             continue
-        if pgid_up in SHFE_PRODUCTS and exchange_code == "INE":
+        if _is_shfe_product(pgid_up) and exchange_code == "INE":
             continue
         code = f"{pgid_up}{dmonth}.{exchange_code}"
         rec = {
@@ -636,16 +637,11 @@ def _parse_shfe_ine_tradepara(fpath: Path, suffix: str) -> List[Dict]:
         if not instr or "小计" in instr:
             continue
         instr_up = instr.upper()
-        if suffix == ".SHF" and instr_up[:2] in {"SC","BC","LU","NR","EC"}:
+        # 提取品种代码（去掉月份数字）
+        pgid = "".join(c for c in instr_up if c.isalpha())
+        if suffix == ".SHF" and _is_ine_product(pgid):
             continue
-        if (
-            suffix == ".INE"
-            and instr_up[:2] in {
-                "CU","AL","ZN","PB","NI","SN",
-                "AU","AG","RB","WR","HC","SS","FU","BU",
-                "BR","RU","SP","OP","AD","AO"
-            }
-        ):
+        if suffix == ".INE" and _is_shfe_product(pgid):
             continue
         upper = _float(item.get("UPPER_VALUE"))
         upper = _float(item.get("UPPER_VALUE"))
@@ -782,22 +778,6 @@ def _parse_csi_market(fpath: Path) -> List[Dict]:
 # 最小变动价位, used for price limit rounding
 # -----------------------------------------------------------------------
 
-CZCE_TICK_SIZE = {
-    "AP": 1.0, "CF": 5.0, "CJ": 1.0, "CY": 5.0, "FG": 1.0,
-    "JR": 1.0, "MA": 1.0, "OI": 1.0, "PF": 2.0, "PK": 2.0,
-    "PL": 1.0, "PM": 1.0, "PX": 2.0,
-    "RI": 1.0, "RM": 1.0, "RS": 1.0,
-    "SA": 1.0, "SF": 2.0, "SH": 1.0, "SM": 2.0, "SR": 1.0,
-    "TA": 2.0, "UR": 1.0, "WH": 1.0, "ZC": 0.2, "PR": 1.0,
-}
-
-
-def _get_tick_size(code: str) -> Optional[float]:
-    """Get minimum tick size for a contract code."""
-    product = "".join(c for c in code.split(".")[0] if c.isalpha())
-    return CZCE_TICK_SIZE.get(product)
-
-
 def _parse_limit_pct(raw: str) -> Optional[float]:
     """Parse CZCE limit pct: '\u00b113' -> 0.13, '\u00b120' -> 0.20."""
     if raw is None:
@@ -853,7 +833,12 @@ def _pct_val(val: str) -> Optional[float]:
 # 最小变动价位(从原始 HTML 解析)
 # -----------------------------------------------------------------------
 
-PRODUCT_CONFIG_DIR = RAW_DIR / "product_configs"
+PRODUCT_CONFIG_DIR = (
+    Path(os.environ["DATA_DIR"]) / "raw" / "product_configs"
+)
+
+# {产品代码: "SHF"|"INE"}, 由 _load_product_tick_map() 填充
+_PRODUCT_EXCHANGE_MAP: Dict[str, str] = {}
 
 # 无独立产品页面的品种,直接从交易所规则硬编码
 # op_f(胶版印刷纸)在 SHFE 官网上无合约规格独立页面,无法通过 HTML 爬取
@@ -885,13 +870,16 @@ def _parse_tick_from_html(html: str) -> Optional[float]:
 
 
 def _load_product_tick_map() -> Dict[str, float]:
-    """从 product_configs HTML 文件解析 tick 映射。
+    """从 product_configs HTML 解析 tick + 交易所归属映射。
 
-    读取 data/raw/product_configs/ 目录下所有 HTML 文件,
-    从合约规格表中提取各品种"最小变动价位"。
+    Returns: {pgid: tick_size}
+    同时设置模块级 _PRODUCT_EXCHANGE_MAP: {pgid: "SHF"|"INE"}
     """
+    global _PRODUCT_EXCHANGE_MAP
     tick_map: Dict[str, float] = {}
+    exchange_map: Dict[str, str] = {}
     if not PRODUCT_CONFIG_DIR.exists():
+        _PRODUCT_EXCHANGE_MAP = exchange_map
         return tick_map
 
     for fpath in sorted(PRODUCT_CONFIG_DIR.iterdir()):
@@ -901,10 +889,16 @@ def _load_product_tick_map() -> Dict[str, float]:
         parts = fpath.stem.split(".")
         if len(parts) < 3:
             continue
+        exchange = parts[1]  # SHFE or INE
+        if exchange not in ("SHFE", "INE"):
+            continue
         code_key = parts[-1].lower()  # e.g. cu_f
         if not code_key.endswith("_f"):
             continue
         pgid = code_key.rsplit("_", 1)[0]  # e.g. cu
+        # INE 优先：SHFE 页面可能列出 INE 品种, INE 覆盖 SHFE
+        if pgid not in exchange_map or exchange == "INE":
+            exchange_map[pgid] = "SHF" if exchange == "SHFE" else "INE"
 
         try:
             html = fpath.read_text(encoding="utf-8")
@@ -913,6 +907,9 @@ def _load_product_tick_map() -> Dict[str, float]:
                 tick_map[pgid] = tick
         except Exception:
             continue
+
+    _PRODUCT_EXCHANGE_MAP = exchange_map
+    _set_product_exchange_map(exchange_map)
 
     # 补充硬编码品种(无独立产品页面的品种)
     for pgid, tick in HARDCODED_TICK.items():
@@ -1042,7 +1039,7 @@ def merge_by_code_date(records: List[Dict]) -> List[Dict]:
                             )
                 else:
                     # CZCE and others: CZCE-style rounding
-                    tick = rec.get("_tick_size") or _get_tick_size(code)
+                    tick = rec.get("_tick_size")
                     raw_up = pre_settle * (1 + limit_pct)
                     raw_down = pre_settle * (1 - limit_pct_down)
                     rec["maxup"] = (
@@ -1095,14 +1092,11 @@ def get_attachment_failures() -> list[dict]:
     return list(_att_failures)
 
 
-_ZHIPU_KEY = "f2f4fa94c73c4721ab3d7223548f49eb.e460UuOGcDGIuP6C"
-_ZHIPU_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-_ZHIPU_VISION_MODEL = "glm-4v-flash"
+_ZHIPU_KEY = os.environ["ZHIPU_API_KEY"]
+_ZHIPU_URL = os.environ["ZHIPU_BASE_URL"]
+_ZHIPU_VISION_MODEL = os.environ["ZHIPU_VISION_MODEL"]
 
-_PROMPT_DIR = (
-    Path(os.path.dirname(os.path.abspath(__file__))).parent.parent
-    / "prompts"
-)
+_PROMPT_DIR = Path(os.environ["DATA_DIR"])
 
 
 def _load_prompt(name: str) -> str:
