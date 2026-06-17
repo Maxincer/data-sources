@@ -160,7 +160,7 @@ def _get_book() -> OrderLimitBook:
     global _book
     if _book is None:
         _book = OrderLimitBook()
-        data_dir = Path(os.environ.get("DATA_DIR", "./data"))
+        data_dir = Path(os.environ["DATA_DIR"])
         csv_path = data_dir / "fields_from_announcements.csv"
         meta_path = data_dir / "raw" / "announcements" / "announcements_metadata.json"
         _book.load(csv_path, meta_path)

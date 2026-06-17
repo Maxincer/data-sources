@@ -659,7 +659,7 @@ class Verifier:
                 for r in ex_res.values()
             )
 
-            lines.append(f"")
+            lines.append("")
             lines.append(f"  ── {ex} ──")
 
             # Header row
@@ -669,7 +669,7 @@ class Verifier:
             lines.append(f"  {'-' * len(header)}")
 
             if not has_any_diff:
-                lines.append(f"  ✅ 全部字段完全一致")
+                lines.append("  ✅ 全部字段完全一致")
                 continue
 
             for field in all_fields:

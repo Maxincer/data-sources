@@ -66,7 +66,7 @@ def pad_czce_code(raw_code: str, ref_date: date = None) -> str:
     else:
         body = raw_code
 
-    m = re.search(rf"([a-zA-Z]+)(\d{{3,4}})$", body)
+    m = re.search(r"([a-zA-Z]+)(\d{3,4})$", body)
     if not m:
         return raw_code
     digits = m.group(2)
@@ -604,7 +604,9 @@ def _pct_val(val: str) -> float | None:
         return None
 
 
-RAW_DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")) / "raw" / "structured"
+RAW_DATA_DIR = (
+    Path(os.environ["DATA_DIR"]) / "raw" / "structured"
+)
 
 
 def fill_cffex_margin_from_history(records: list) -> list:
@@ -615,7 +617,10 @@ def fill_cffex_margin_from_history(records: list) -> list:
     即使今日发布了新的结算文件，也不使用它填充——
     只用历史文件（非今日），避免用今日尚未完整的结算数据覆盖。
     """
-    dates = {r.get("date", "") for r in records if r.get("code", "").endswith(".CFE")}
+    dates = {
+    r.get("date", "") for r in records
+    if r.get("code", "").endswith(".CFE")
+}
     if not dates:
         return records
 
@@ -653,7 +658,10 @@ def fill_cffex_margin_from_history(records: list) -> list:
         code = rec.get("code", "")
         if not code.endswith(".CFE"):
             continue
-        if rec.get("long_margin") is not None or rec.get("short_margin") is not None:
+        if (
+    rec.get("long_margin") is not None
+    or rec.get("short_margin") is not None
+):
             continue
         prefix = code.replace(".CFE", "")
         if prefix in margin_map:

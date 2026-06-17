@@ -7,7 +7,7 @@ import logging
 import os
 import smtplib
 import ssl
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -30,18 +30,17 @@ _FULL_FIELDS = [
     "minoq", "maxoq",
 ]
 
-_FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK", "")
+_FEISHU_WEBHOOK = os.environ["FEISHU_WEBHOOK"]
 
 
 def _parse_date_safe(date_str: str):
-    """Parse YYYYMMDD or YYYYMMDD-like string to datetime, return None on failure."""
+    """Parse YYYYMMDD or YYYY-like string to datetime, None on failure."""
     import re as _re
     if not date_str:
         return None
     d = date_str.strip().replace("-", "")
     d = _re.sub(r'[A-Z]+', lambda m: '01' * (len(m.group()) // 2), d)
     if len(d) >= 8 and d[:8].isdigit():
-        from datetime import datetime
         return datetime.strptime(d[:8], "%Y%m%d")
     return None
 
@@ -50,7 +49,8 @@ class Reporter:
     """All pipeline reporting methods."""
     def __init__(self, logger=None):
         self.logger = logger or get_logger(
-            "data_sources.reporter", logging.DEBUG, os.environ.get("LOG_DIR", "./logs"), "Reporter",
+            "reporter", logging.DEBUG,
+            os.environ["LOG_DIR"], "Reporter",
         )
 
     def task_report(self, tasks: List[Task], trade_date: str) -> None:
@@ -99,9 +99,9 @@ class Reporter:
         # 比对库 (旧表 t_futures_info) 配置，通过环境变量传入
         _ref_db = {
             k: v for k, v in {
-                "host": os.environ.get("REF_DB_HOST"),
-                "user": os.environ.get("REF_DB_USER"),
-                "password": os.environ.get("REF_DB_PASSWORD", ""),
+                "host": os.environ["REF_DB_HOST"],
+                "user": os.environ["REF_DB_USER"],
+                "password": os.environ["REF_DB_PASSWORD"],
                 "database": os.environ["REF_DB_DATABASE"]
             }.items() if v is not None
         } or None
@@ -171,7 +171,7 @@ class Reporter:
     def _smtp_send(self, date_str, stats, abnormal, comparisons,
                    sender=None, recipients=None):
         """发送邮件（SMTP）。"""
-        password = os.environ.get("SMTP_PASSWORD")
+        password = os.environ["SMTP_PASSWORD"]
         if not password:
             self.logger.warning("SMTP_PASSWORD 未设置，跳过邮件发送")
             return
@@ -239,13 +239,14 @@ class Reporter:
 
         条件:
           1. needs_review = 1
-          2. publish_date <= today <= effective_date + 7 days (或 effective_date 为空时取 publish_date)
+          2. publish_date <= today <= effective_date + 7 days
+             (或 effective_date 为空时取 publish_date)
         """
         import csv
-        from datetime import datetime, timedelta
+
 
         csv_path = (
-            Path(os.environ.get("DATA_DIR", "./data"))
+            Path(os.environ["DATA_DIR"])
             / "fields_from_announcements.csv"
         )
         if not csv_path.exists():
@@ -262,7 +263,9 @@ class Reporter:
                 pd_str = row.get("publish_date", "").strip()
                 eff_str = row.get("effective_date", "").strip()
                 # effective_date 含占位字母时取 publish_date 作为窗口起点
-                window_start = _parse_date_safe(eff_str) or _parse_date_safe(pd_str)
+                window_start = (
+                    _parse_date_safe(eff_str) or _parse_date_safe(pd_str)
+                )
                 if not window_start:
                     continue
                 window_end = window_start + timedelta(days=7)
@@ -305,7 +308,10 @@ class Reporter:
     @staticmethod
     def _build_file_size_section(date_str: str) -> str:
         """Section 1: file size changes from metadata."""
-        metadata_file = Path(os.environ.get("DATA_DIR", "./data")) / "raw" / ".metadata.jsonl"
+        metadata_file = (
+            Path(os.environ["DATA_DIR"])
+            / "raw" / "structured" / ".metadata.jsonl"
+        )
         lines = [f"**交易日期**: {date_str}", ""]
         if metadata_file.exists():
             lines.append("**数据文件尺寸变化**:")
@@ -314,7 +320,7 @@ class Reporter:
             total_size = 0
             # 去重：每个文件只取最后一次记录
             records: dict[str, dict] = {}
-            with open(metadata_file) as f:
+            with open(metadata_file, encoding="utf-8") as f:
                 for line in f:
                     try:
                         rec = json.loads(line)
@@ -388,7 +394,9 @@ class Reporter:
         return "\n".join(lines)
 
     @staticmethod
-    def _build_comparison_section(title: str, comp: dict, _date_str: str) -> str:
+    def _build_comparison_section(
+        title: str, comp: dict, _date_str: str
+    ) -> str:
         """Unified comparison report section.
 
         Structure:
@@ -435,7 +443,10 @@ class Reporter:
                 open_v = rec.get("open", "—")
                 close_v = rec.get("close", "—")
                 settle_v = rec.get("settle", "—")
-                lines.append(f"  ❌ code={code}, open={open_v}, close={close_v}, settle={settle_v}")
+                lines.append(
+                    f"  ❌ code={code}, open={open_v}, "
+                    f"close={close_v}, settle={settle_v}"
+                )
             lines.append("")
         if ecnt:
             lines.append(f"**缺漏** (source_b有/source_a无, 共{ecnt}条, 最多10条):")
@@ -444,7 +455,10 @@ class Reporter:
                 open_v = rec.get("open", "—")
                 close_v = rec.get("close", "—")
                 settle_v = rec.get("settle", "—")
-                lines.append(f"  ➕ code={code}, open={open_v}, close={close_v}, settle={settle_v}")
+                lines.append(
+                    f"  ➕ code={code}, open={open_v}, "
+                    f"close={close_v}, settle={settle_v}"
+                )
             lines.append("")
 
         # ---- groupby ex, field ----
@@ -459,10 +473,21 @@ class Reporter:
             lines.append("| :--- | ---: | ---: | ---: | ---: |")
             for fname in _FULL_FIELDS:
                 s = fs.get(fname, {})
-                icon = "✅" if s.get("diff", 0) == 0 and s.get("missing_a", 0) == 0 and s.get("missing_b", 0) == 0 else ""
+                icon = (
+                    "✅"
+                    if s.get("diff", 0) == 0
+                    and s.get("missing_a", 0) == 0
+                    and s.get("missing_b", 0) == 0
+                    else ""
+                )
                 lines.append(
-                    f"| {icon}{fname} | {s.get('matched',0)} | {s.get('diff',0)} | "
-                    f"{s.get('missing_a',0)} | {s.get('missing_b',0)} |"
+                    (
+                        f"| {icon}{fname} "
+                        f"| {s.get('matched',0)} "
+                        f"| {s.get('diff',0)} "
+                        f"| {s.get('missing_a',0)} "
+                        f"| {s.get('missing_b',0)} |"
+                    )
                 )
             lines.append("")
 
@@ -491,7 +516,10 @@ class Reporter:
                     continue
                 diff_count = s.get("diff", 0)
                 limit = None if diff_count < 10 else 10
-                samples = sorted(s.get("sample_diffs", []), key=lambda x: x.get("ratio", 0), reverse=True)
+                samples = sorted(
+                    s.get("sample_diffs", []),
+                    key=lambda x: x.get("ratio", 0), reverse=True,
+                )
                 missing_b = s.get("sample_missing_in_new", [])
                 missing_a = s.get("sample_missing_in_original", [])
                 total = diff_count + len(missing_a) + len(missing_b)
@@ -504,7 +532,12 @@ class Reporter:
                         if isinstance(sd.get('a-b'), (int, float))
                         and abs(sd['a-b']) < 0.001
                     ]
-                    if tiny_diffs and len(tiny_diffs) == len(samples) and not missing_a and not missing_b:
+                    if (
+                        tiny_diffs
+                        and len(tiny_diffs) == len(samples)
+                        and not missing_a
+                        and not missing_b
+                    ):
                         lines.append(
                             f"    {len(tiny_diffs)} 条差异均 < 0.001 (可忽略)"
                         )
@@ -513,7 +546,11 @@ class Reporter:
                 for sd in samples[:limit]:
                     a_b = sd.get('a-b', '—')
                     ratio = sd.get('ratio', '-')
-                    ratio_str = f" |a-b|/b={ratio:.6f}" if isinstance(ratio, (int, float)) else ""
+                    ratio_str = (
+                        f" |a-b|/b={ratio:.6f}"
+                        if isinstance(ratio, (int, float))
+                        else ""
+                    )
                     lines.append(
                         f"    {sd['code']}:"
                         f" a={sd['original']}"
@@ -540,7 +577,10 @@ class Reporter:
     @staticmethod
     def _email_file_size_section(date_str: str) -> str:
         """File size section for email, matching Feishu format."""
-        metadata_file = Path(os.environ.get("DATA_DIR", "./data")) / "raw" / ".metadata.jsonl"
+        metadata_file = (
+            Path(os.environ["DATA_DIR"])
+            / "raw" / "structured" / ".metadata.jsonl"
+        )
         parts = ['<h2>📁 数据文件尺寸变化</h2>']
         if metadata_file.exists():
             parts.append(
@@ -555,7 +595,7 @@ class Reporter:
             total_size = 0
             # 去重：每个文件只取最后一次记录
             records: dict[str, dict] = {}
-            with open(metadata_file) as f:
+            with open(metadata_file, encoding="utf-8") as f:
                 for line in f:
                     try:
                         rec = json.loads(line)
@@ -602,7 +642,9 @@ class Reporter:
         )
 
     @staticmethod
-    def _email_comparison_section(title: str, comp: dict, _date_str: str) -> str:
+    def _email_comparison_section(
+        title: str, comp: dict, _date_str: str
+    ) -> str:
         """Unified comparison section for email (HTML)."""
         parts = [f'<h2>{title}</h2>']
 
@@ -637,10 +679,14 @@ class Reporter:
             color = "red" if d["missing"] > 0 else "green"
             parts.append(
                 f'<tr><td><b>{ex}</b></td>'
-                f'<td style="text-align:center">{d["source_a"]}</td>'
-                f'<td style="text-align:center">{d["source_b"]}</td>'
-                f'<td style="text-align:center;color:{color}">{d["missing"]}</td>'
-                f'<td style="text-align:center">{d["extra"]}</td></tr>'
+                f'<td style="text-align:center">'
+                f'{d["source_a"]}</td>'
+                f'<td style="text-align:center">'
+                f'{d["source_b"]}</td>'
+                f'<td style="text-align:center;color:{color}">'
+                f'{d["missing"]}</td>'
+                f'<td style="text-align:center">'
+                f'{d["extra"]}</td></tr>'
             )
         parts.append('</table>')
 
@@ -648,7 +694,9 @@ class Reporter:
         missing_records = comp.get("missing_records", [])
         extra_records = comp.get("extra_records", [])
         if missing_count:
-            parts.append(f'<p>➕ 多余: {missing_count} 条 (source_a有/source_b无)</p>')
+            parts.append(
+                f'<p>➕ 多余: {missing_count} 条 (source_a有/source_b无)</p>'
+            )
             parts.append('<ul>')
             for rec in missing_records[:10]:
                 code = rec.get("code", "?")
@@ -658,7 +706,9 @@ class Reporter:
                 parts.append(f'<li>... 还有 {missing_count - 10} 条</li>')
             parts.append('</ul>')
         if extra_count:
-            parts.append(f'<p>⚠️ 缺漏: {extra_count} 条 (source_b有/source_a无)</p>')
+            parts.append(
+                f'<p>⚠️ 缺漏: {extra_count} 条 (source_b有/source_a无)</p>'
+            )
             parts.append('<ul>')
             for rec in extra_records[:10]:
                 code = rec.get("code", "?")
@@ -680,15 +730,23 @@ class Reporter:
             )
             for fname in _FULL_FIELDS:
                 s = fs.get(fname, {})
-                if s.get("diff", 0) == 0 and s.get("missing_a", 0) == 0 and s.get("missing_b", 0) == 0:
+                if (
+                    s.get("diff", 0) == 0
+                    and s.get("missing_a", 0) == 0
+                    and s.get("missing_b", 0) == 0
+                ):
                     continue
                 color = "red" if s.get("diff", 0) > 0 else "green"
                 parts.append(
                     f'<tr style="color:{color}"><td><b>{fname}</b></td>'
-                    f'<td style="text-align:right">{s.get("matched", 0)}</td>'
-                    f'<td style="text-align:right">{s.get("diff", 0)}</td>'
-                    f'<td style="text-align:right">{s.get("missing_a", 0)}</td>'
-                    f'<td style="text-align:right">{s.get("missing_b", 0)}</td></tr>'
+                    f'<td style="text-align:right">'
+                    f'{s.get("matched", 0)}</td>'
+                    f'<td style="text-align:right">'
+                    f'{s.get("diff", 0)}</td>'
+                    f'<td style="text-align:right">'
+                    f'{s.get("missing_a", 0)}</td>'
+                    f'<td style="text-align:right">'
+                    f'{s.get("missing_b", 0)}</td></tr>'
                 )
             parts.append('</table>')
 
@@ -702,11 +760,18 @@ class Reporter:
                 ex_diffs = fd[ex]
                 for field in _FULL_FIELDS:
                     s = ex_diffs.get(field, {})
-                    if s.get("diff", 0) == 0 and s.get("missing_in_original", 0) == 0 and s.get("missing_in_new", 0) == 0:
+                    if (
+                        s.get("diff", 0) == 0
+                        and s.get("missing_in_original", 0) == 0
+                        and s.get("missing_in_new", 0) == 0
+                    ):
                         continue
                     diff_count = s.get("diff", 0)
                     limit = None if diff_count < 10 else 10
-                    samples = sorted(s.get("sample_diffs", []), key=lambda x: x.get("ratio", 0), reverse=True)
+                    samples = sorted(
+                    s.get("sample_diffs", []),
+                    key=lambda x: x.get("ratio", 0), reverse=True,
+                )
                     missing_b = s.get("sample_missing_in_new", [])
                     missing_a = s.get("sample_missing_in_original", [])
                     parts.append(f'<p><b>{ex} {field}</b></p>')
@@ -718,9 +783,17 @@ class Reporter:
                             if isinstance(sd.get('a-b'), (int, float))
                             and abs(sd['a-b']) < 0.001
                         ]
-                        if tiny_diffs and len(tiny_diffs) == len(samples) and not missing_a and not missing_b:
+                        if (
+                        tiny_diffs
+                        and len(tiny_diffs) == len(samples)
+                        and not missing_a
+                        and not missing_b
+                    ):
                             parts.append(
-                                f'<ul><li>{len(tiny_diffs)} 条差异均 &lt; 0.001 (可忽略)</li></ul>'
+                                (
+                                    f'<ul><li>{len(tiny_diffs)} 条差异均 '
+                                    f'&lt; 0.001 (可忽略)</li></ul>'
+                                )
                             )
                             continue
 
@@ -728,14 +801,29 @@ class Reporter:
                     for sd in samples[:limit]:
                         a_b = sd.get('a-b', '—')
                         ratio = sd.get('ratio', '-')
-                        ratio_str = f" |a-b|/b={ratio:.6f}" if isinstance(ratio, (int, float)) else ""
+                        ratio_str = (
+                        f" |a-b|/b={ratio:.6f}"
+                        if isinstance(ratio, (int, float))
+                        else ""
+                    )
                         parts.append(
-                            f'<li>{sd["code"]}: a={sd["original"]} b={sd["new"]} a-b={a_b}{ratio_str}</li>'
+                            (
+                                f'<li>{sd["code"]}: '
+                                f'a={sd["original"]} '
+                                f'b={sd["new"]} '
+                                f'a-b={a_b}{ratio_str}</li>'
+                            )
                         )
                     for sd in missing_b:
-                        parts.append(f'<li>{sd["code"]}: a={sd["original"]} b=—</li>')
+                        parts.append(
+                            f'<li>{sd["code"]}: '
+                            f'a={sd["original"]} b=—</li>'
+                        )
                     for sd in missing_a:
-                        parts.append(f'<li>{sd["code"]}: a=— b={sd["new"]}</li>')
+                        parts.append(
+                            f'<li>{sd["code"]}: a=— '
+                            f'b={sd["new"]}</li>'
+                        )
                     parts.append('</ul>')
 
         return "\n".join(parts)

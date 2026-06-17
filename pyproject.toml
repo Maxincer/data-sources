@@ -14,6 +14,7 @@ dependencies = [
     "playwright~=1.58.0",
     "beautifulsoup4>=4.14.0",
     "aiohttp>=3.8.0",
+    "tushare>=1.4.0",
     "pymupdf>=1.22.0",
     "openpyxl>=3.0.0",
     "mxz-utils>=0.1.0",

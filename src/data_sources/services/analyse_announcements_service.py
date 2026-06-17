@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import aiohttp
+import socket
 from mxz_utils.logging_config import get_logger
 
 from data_sources.parser import (
@@ -59,7 +60,7 @@ def load_existing() -> set[str]:
                     aid = row.get("announcement_id", "").strip()
                     if aid:
                         seen.add(aid)
-        row_count = sum(1 for _ in open(OUTPUT_FILE)) - 1
+        row_count = sum(1 for _ in open(OUTPUT_FILE, encoding="utf-8")) - 1
         logger.info("已有 CSV: %s 条", row_count)
     else:
         logger.info("CSV 不存在，从头开始")
@@ -198,6 +199,7 @@ def main():
         conn = aiohttp.TCPConnector(
             limit=semaphore * 2, limit_per_host=semaphore,
             enable_cleanup_closed=True,
+            family=socket.AF_INET,
         )
         async with aiohttp.ClientSession(connector=conn, trust_env=False) as session:
             # 首轮解析
@@ -269,23 +271,32 @@ def main():
         logger.info("无新增，退出")
         return
 
-    # 按 publish_date, exchange, announcement_id 升序
-    new_rows.sort(key=lambda r: (
-        r["publish_date"],
-        r["exchange"],
-        r["announcement_id"]
+    # 读取已有数据，合并后全量排序写入
+    existing_rows = []
+    if OUTPUT_FILE.exists():
+        with open(OUTPUT_FILE, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                existing_rows.append(row)
+
+    all_rows = existing_rows + new_rows
+    all_rows.sort(key=lambda r: (
+        r.get("publish_date", ""),
+        r.get("exchange", ""),
+        r.get("announcement_id", ""),
     ))
 
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    write_mode = "a" if OUTPUT_FILE.exists() else "w"
-    with open(OUTPUT_FILE, mode=write_mode, newline="",
+    with open(OUTPUT_FILE, mode="w", newline="",
               encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=HEADER, quoting=csv.QUOTE_NONE, escapechar='\\')
-        if write_mode == "w":
-            writer.writeheader()
-        writer.writerows(new_rows)
+        writer.writeheader()
+        writer.writerows(all_rows)
 
-    logger.info("写入完成: +%s 条 → %s", len(new_rows), OUTPUT_FILE)
+    logger.info(
+        "写入完成: +%s 条, 总计 %s 条 → %s",
+        len(new_rows), len(all_rows), OUTPUT_FILE,
+    )
 
 
 if __name__ == "__main__":

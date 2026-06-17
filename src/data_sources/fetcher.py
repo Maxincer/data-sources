@@ -24,7 +24,9 @@ from data_sources.verifier import Verifier
 from data_sources.reporter import Reporter
 from data_sources.configs import build_task_configs, DCE_BASE_URL
 
-RAW_DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")) / "raw" / "structured"
+RAW_DATA_DIR = (
+    Path(os.environ["DATA_DIR"]) / "raw" / "structured"
+)
 RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
 METADATA_FILE = RAW_DATA_DIR / ".metadata.jsonl"
 def _dce_credentials():
@@ -106,7 +108,7 @@ class Fetcher:
         self.logger = get_logger(
             name="Fetcher",
             level="INFO",
-            dirpath_logs=os.environ.get("LOG_DIR", "./logs"),
+            dirpath_logs=os.environ["LOG_DIR"],
             logfile_basename="Fetcher",
         )
         self.fake_headers = {
@@ -117,6 +119,7 @@ class Fetcher:
             ),
             "Content-Type": "application/x-www-form-urlencoded",
         }
+        self._dce_token_cache = None
         self.verifier = Verifier(self.logger, METADATA_FILE)
         self.reporter = Reporter(self.logger)
         self.task_configs = build_task_configs(self)
@@ -597,7 +600,7 @@ class Fetcher:
     def _get_dce_token(self) -> Optional[str]:
         """Retrieve a valid Bearer token for the DCE API, with caching."""
         now = time.time()
-        cache = getattr(self, "_dce_token_cache", None)
+        cache = self._dce_token_cache
         if cache and now < cache["expiry"]:
             return cache["token"]
 
@@ -963,10 +966,7 @@ class Fetcher:
         """
         import tushare as ts
 
-        token = os.environ.get("TUSHARE_TOKEN")
-        if not token:
-            return {"success": False, "error": "TUSHARE_TOKEN not set"}
-        ts.set_token(token)
+        ts.set_token(os.environ["TUSHARE_TOKEN"])
         pro = ts.pro_api()
 
         trade_date = task.trade_date
@@ -1072,7 +1072,6 @@ class Fetcher:
         """
         from playwright.sync_api import sync_playwright
         from bs4 import BeautifulSoup
-        import re
 
         nick = "shfe" if task.exchange == "SHFE" else "ine"
         domain = f"www.{nick}.com.cn"
@@ -1083,13 +1082,19 @@ class Fetcher:
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=True,
-                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+                args=[
+                    "--no-sandbox",
+                    "--disable-blink-features=AutomationControlled",
+                ],
             )
             page = browser.new_page()
 
             try:
                 # ── Step 1: 访问列表页，发现所有产品 URL ──
-                self.logger.info("Discovering %s products from %s", task.exchange, listing_url)
+                self.logger.info(
+                    "Discovering %s products from %s",
+                    task.exchange, listing_url,
+                )
                 page.goto(listing_url, wait_until="commit", timeout=30000)
                 page.wait_for_timeout(8000)
                 html = page.content()
@@ -1110,7 +1115,9 @@ class Fetcher:
                         seen.add(m.group(1))
                         code_match = re.search(r"/(\w+_f)/$", href)
                         code = code_match.group(1) if code_match else "unknown"
-                        products.append({"code": code, "url": f"https://{domain}{m.group(1)}"})
+                        products.append(
+                        {"code": code, "url": f"https://{domain}{m.group(1)}"}
+                    )
 
                 self.logger.info("Found %d products", len(products))
 
@@ -1118,15 +1125,24 @@ class Fetcher:
                 success_count = 0
                 for i, prod in enumerate(products):
                     code = prod["code"]
-                    save_name = f"{task.trade_date}.{task.exchange}.{code}.html"
+                    save_name = (
+                        f"{task.trade_date}.{task.exchange}"
+                        f".{code}.html"
+                    )
                     save_path = self.PRODUCT_CONFIG_DIR / save_name
 
                     if save_path.exists():
-                        self.logger.debug("  [%d/%d] %s already exists", i + 1, len(products), code)
+                        self.logger.debug(
+                        "  [%d/%d] %s already exists",
+                        i + 1, len(products), code,
+                    )
                         success_count += 1
                         continue
 
-                    self.logger.info("  [%d/%d] Fetching %s...", i + 1, len(products), code)
+                    self.logger.info(
+                        "  [%d/%d] Fetching %s...",
+                        i + 1, len(products), code,
+                    )
                     page.goto(prod["url"], wait_until="commit", timeout=30000)
                     page.wait_for_timeout(6000)
 
@@ -1139,18 +1155,27 @@ class Fetcher:
                         continue
 
                     save_path.write_text(page_html, encoding="utf-8")
-                    self.logger.info("    ✓ %s (%d bytes)", save_name, len(page_html))
+                    self.logger.info(
+                        "    ✓ %s (%d bytes)",
+                        save_name, len(page_html),
+                    )
                     success_count += 1
                     time.sleep(1)
 
             except Exception as e:
-                self.logger.error("Product config fetch failed: %s", e, exc_info=True)
+                self.logger.error(
+                    "Product config fetch failed: %s",
+                    e, exc_info=True,
+                )
                 return {"success": False, "error": str(e)}
             finally:
                 page.close()
                 browser.close()
 
-        self.logger.info("%s product config: %d/%d saved", task.exchange, success_count, len(products))
+        self.logger.info(
+        "%s product config: %d/%d saved",
+        task.exchange, success_count, len(products),
+    )
         return {"success": True}
 
     def _fetch_shfe_product_config(self, task: Task) -> Dict:
@@ -1192,7 +1217,9 @@ class Fetcher:
                 server_dates = {s["date"] for s in server_files}
                 self.logger.info(
                     "CFFEX Settlement: 服务端有 %d 个文件 (%s~%s)",
-                    len(server_files), server_files[-1]["date"], server_files[0]["date"],
+                    len(server_files),
+                    server_files[-1]["date"],
+                    server_files[0]["date"],
                 )
                 for entry in server_files:
                     fname = f"{entry['date']}.CFFEX.SettlementParameters.csv"
@@ -1201,15 +1228,23 @@ class Fetcher:
                         continue
                     self.logger.info("下载缺失的 CFFEX Settlement: %s", fname)
                     try:
-                        resp = requests.get(entry["url"], headers=self.fake_headers, timeout=30)
+                        resp = requests.get(
+                        entry["url"],
+                        headers=self.fake_headers, timeout=30,
+                    )
                         resp.raise_for_status()
                         with open(fpath, "wb") as f:
                             f.write(resp.content)
-                        self.logger.info("  ✅ %s 已保存 (%d bytes)", fname, len(resp.content))
+                        self.logger.info(
+                        "  ✅ %s 已保存 (%d bytes)",
+                        fname, len(resp.content),
+                    )
                     except Exception as e:
                         self.logger.warning("  ⚠ %s 下载失败: %s", fname, e)
                 # 清理本地多余文件
-                for fpath in sorted(RAW_DATA_DIR.glob("*.CFFEX.SettlementParameters.csv")):
+                for fpath in sorted(
+                    RAW_DATA_DIR.glob("*.CFFEX.SettlementParameters.csv")
+                ):
                     d = fpath.name[:8]
                     if d >= "20260401" and d not in server_dates:
                         fpath.unlink()
@@ -1221,13 +1256,17 @@ class Fetcher:
             task = Task.from_config(config, trade_date)
 
             # CFFEX Settlement 已改为同步模式，跳过旧的任务循环
-            if task.exchange == "CFFEX" and task.description == "SettlementParameters":
+            if (
+                task.exchange == "CFFEX"
+                and task.description == "SettlementParameters"
+            ):
                 continue
 
             # GFEX 交易参数表 & 日行情不支持按日期查询——仅当请求日期 >= 已有文件最新日期时才下载
             # 结算参数表（SettlementParameters）已用数组格式支持历史查询，不受影响
             if (task.exchange == "GFEX"
-                    and task.description in ("TradingParameters", "DailyMarketData")
+                    and task.description
+                    in ("TradingParameters", "DailyMarketData")
                     and trade_date < gfe_latest):
                 self.logger.warning(
                     "跳过 GFEX %s %s：API 不支持按日期查询, "
@@ -1280,7 +1319,10 @@ def main():
 # -----------------------------------------------------------------
 
 
-def _fetch_dce_single(date_str: str, config_module: str, fetch_attr: str, label: str) -> bool:
+def _fetch_dce_single(
+    date_str: str, config_module: str,
+    fetch_attr: str, label: str,
+) -> bool:
     """下载 DCE 单个接口的数据（generic helper）。"""
     f = Fetcher()
     mod = __import__(

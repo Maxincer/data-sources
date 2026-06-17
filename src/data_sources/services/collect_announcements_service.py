@@ -91,7 +91,7 @@ CFFEX_DAILY_PAGES = [
     "http://www.cffex.com.cn/cn/jysgg.html",   # 交易所公告
     "http://www.cffex.com.cn/cn/jystz.html",   # 交易所通知
 ]
-DAILY_START_DATE = os.environ.get("DAILY_START_DATE", "20251201")
+DAILY_START_DATE = os.environ["DAILY_START_DATE"]
 
 # CFFEX 规则页中需要跳过的栏目
 CFFEX_SKIP_SECTIONS = {"已废止业务规则", "历史版本"}
@@ -1516,7 +1516,7 @@ def _shfe_article_id(url: str) -> str:
 
 
 def _shfe_extract_list(
-    page, base_url: str,
+    page,
 ) -> list[tuple[str, str]]:
     """在 Playwright page 中访问列表页, 返回 [(href, title), ...]."""
     html = page.content()
@@ -1538,7 +1538,7 @@ def _shfe_extract_rules(page) -> list[dict]:
                    else f"{base_url}index_{page_idx}.html")
             page.goto(url, wait_until="networkidle", timeout=30000)
             time.sleep(1)
-            items = _shfe_extract_list(page, base_url)
+            items = _shfe_extract_list(page)
             if not items:
                 break
             for href, title in items:
@@ -1570,7 +1570,7 @@ def _shfe_extract_daily(page) -> list[dict]:
                else f"{SHFE_NOTICES_URL}index_{page_idx}.html")
         page.goto(url, wait_until="networkidle", timeout=30000)
         time.sleep(1)
-        items = _shfe_extract_list(page, SHFE_NOTICES_URL)
+        items = _shfe_extract_list(page)
         if not items:
             break
         page_count = 0

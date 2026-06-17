@@ -25,7 +25,7 @@ def resolve_config(config_override: dict | None = None) -> dict:
     cfg = {
         "host":     os.environ["DB_HOST"],
         "user":     os.environ["DB_USER"],
-        "password": os.environ.get("DB_PASSWORD", ""),
+        "password": os.environ["DB_PASSWORD"],
         "database": os.environ["DB_DATABASE"],
         "charset":  "utf8mb4",
     }
@@ -42,7 +42,10 @@ def get_connection(config_override: dict | None = None):
     return pymysql.connect(**cfg)
 
 
-def fetch_table(table: str, date: str, config_override: dict | None = None) -> list[dict]:
+def fetch_table(
+    table: str, date: str,
+    config_override: dict | None = None,
+) -> list[dict]:
     """Read all rows from a MySQL table for a given date.
 
     Args:
@@ -69,7 +72,8 @@ def fetch_table(table: str, date: str, config_override: dict | None = None) -> l
                 rec = {}
                 for k, v in row.items():
                     if v is None:
-                        continue  # skip nulls, missing keys will be None on access
+                        continue  # skip nulls,
+                        # missing keys→None on access
                     if hasattr(v, "isoformat"):
                         # date / datetime → YYYYMMDD
                         rec[k] = str(v).replace("-", "")[:8]

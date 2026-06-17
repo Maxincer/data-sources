@@ -15,7 +15,7 @@ METADATA_FILE = ANNOUNCEMENTS_DIR / "metadata.jsonl"
 CHROME_BIN = "/tmp/chrome-extract/opt/google/chrome/chrome"
 CHROME_DEPS = "/tmp/chrome-deps/usr/lib/x86_64-linux-gnu"
 
-os.environ["LD_LIBRARY_PATH"] = CHROME_DEPS + ":" + os.environ.get("LD_LIBRARY_PATH", "")
+os.environ["LD_LIBRARY_PATH"] = CHROME_DEPS + ":" + os.environ["LD_LIBRARY_PATH"]
 
 
 def load_metadata() -> list[dict]:

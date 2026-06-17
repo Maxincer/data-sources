@@ -88,7 +88,8 @@ class ParseStats:
             "SHFE": {"if_basis"},
             "INE": {"if_basis"},
             "GFEX": {"if_basis"},
-            "CSI": {"if_basis", "long_margin", "short_margin", "minoq", "maxoq"},
+            "CSI": {"if_basis", "long_margin", "short_margin",
+         "minoq", "maxoq"},
         }
         expected = _EXPECTED_NULLS.get(self.exchange, set())
         return {
@@ -332,10 +333,19 @@ def _parse_shfe_ine_settlement(fpath: Path) -> List[Dict]:
         if not instr or "小计" in instr:
             continue
         instr_up = instr.upper()
-        if exchange_code == "SHF" and instr_up[:2] in {"SC","BC","LU","NR","EC"}:
+        if (
+            exchange_code == "SHF"
+            and instr_up[:2] in {"SC","BC","LU","NR","EC"}
+        ):
             continue
-        if exchange_code == "INE" and instr_up[:2] in {"CU","AL","ZN","PB","NI","SN",
-            "AU","AG","RB","WR","HC","SS","FU","BU","BR","RU","SP","OP","AD","AO"}:
+        if (
+            exchange_code == "INE"
+            and instr_up[:2] in {
+                "CU","AL","ZN","PB","NI","SN",
+                "AU","AG","RB","WR","HC","SS","FU","BU",
+                "BR","RU","SP","OP","AD","AO"
+            }
+        ):
             continue
         code = instr_up + f".{exchange_code}"
         records.append({
@@ -405,7 +415,10 @@ def _parse_czce_settlement(fpath: Path) -> List[Dict]:
             if not code_raw or not re.match(r"^[A-Z]+\d+", code_raw):
                 continue
             settle = _float(parts[1])
-            margin_pct = float(parts[4].replace(",","")) / 100.0 if parts[4].strip().replace(",","") else None
+            margin_pct = (
+                    float(parts[4].replace(",","")) / 100.0
+                    if parts[4].strip().replace(",","") else None
+                )
             rec = {
                 "code": code_raw + ".CZC",
                 "date": date,
@@ -625,8 +638,14 @@ def _parse_shfe_ine_tradepara(fpath: Path, suffix: str) -> List[Dict]:
         instr_up = instr.upper()
         if suffix == ".SHF" and instr_up[:2] in {"SC","BC","LU","NR","EC"}:
             continue
-        if suffix == ".INE" and instr_up[:2] in {"CU","AL","ZN","PB","NI","SN",
-            "AU","AG","RB","WR","HC","SS","FU","BU","BR","RU","SP","OP","AD","AO"}:
+        if (
+            suffix == ".INE"
+            and instr_up[:2] in {
+                "CU","AL","ZN","PB","NI","SN",
+                "AU","AG","RB","WR","HC","SS","FU","BU",
+                "BR","RU","SP","OP","AD","AO"
+            }
+        ):
             continue
         upper = _float(item.get("UPPER_VALUE"))
         upper = _float(item.get("UPPER_VALUE"))
@@ -667,7 +686,10 @@ def _parse_dce_tradepara(fpath: Path) -> List[Dict]:
             "maxup": _float(item.get("riseLimit")),
             "maxdown": _float(item.get("fallLimit")),
             "long_margin": _float(item.get("specBuyRate")),
-            "short_margin": _float(item.get("specSellRate") or item.get("specBuyRate")),
+            "short_margin": _float(
+                            item.get("specSellRate")
+                            or item.get("specBuyRate")
+                        ),
             "_rise_limit_rate": _float(item.get("riseLimitRate")),
             "_pre_settle": _float(item.get("hedgeBuy") or item.get("specBuy")),
         }
@@ -828,13 +850,13 @@ def _pct_val(val: str) -> Optional[float]:
 
 
 # -----------------------------------------------------------------------
-# 最小变动价位（从原始 HTML 解析）
+# 最小变动价位(从原始 HTML 解析)
 # -----------------------------------------------------------------------
 
 PRODUCT_CONFIG_DIR = RAW_DIR / "product_configs"
 
-# 无独立产品页面的品种，直接从交易所规则硬编码
-# op_f（胶版印刷纸）在 SHFE 官网上无合约规格独立页面，无法通过 HTML 爬取
+# 无独立产品页面的品种,直接从交易所规则硬编码
+# op_f(胶版印刷纸)在 SHFE 官网上无合约规格独立页面,无法通过 HTML 爬取
 HARDCODED_TICK = {
     "op": 2.0,  # 胶版印刷纸
 }
@@ -843,8 +865,8 @@ HARDCODED_TICK = {
 def _parse_tick_from_html(html: str) -> Optional[float]:
     """从 SHFE/INE 合约规格 HTML 页面提取最小变动价位。
 
-    SHFE/INE 产品页面的合约规格表为 <table class='table_info'>，
-    其中"最小变动价位"在 <td> 中，其下一个 <td> 为对应数值。
+    SHFE/INE 产品页面的合约规格表为 <table class='table_info'>,
+    其中"最小变动价位"在 <td> 中,其下一个 <td> 为对应数值。
     """
     soup = BeautifulSoup(html, "html.parser")
     # 定位合约规格表
@@ -865,7 +887,7 @@ def _parse_tick_from_html(html: str) -> Optional[float]:
 def _load_product_tick_map() -> Dict[str, float]:
     """从 product_configs HTML 文件解析 tick 映射。
 
-    读取 data/raw/product_configs/ 目录下所有 HTML 文件，
+    读取 data/raw/product_configs/ 目录下所有 HTML 文件,
     从合约规格表中提取各品种"最小变动价位"。
     """
     tick_map: Dict[str, float] = {}
@@ -892,7 +914,7 @@ def _load_product_tick_map() -> Dict[str, float]:
         except Exception:
             continue
 
-    # 补充硬编码品种（无独立产品页面的品种）
+    # 补充硬编码品种(无独立产品页面的品种)
     for pgid, tick in HARDCODED_TICK.items():
         if pgid not in tick_map:
             tick_map[pgid] = tick
@@ -955,9 +977,9 @@ def merge_by_code_date(records: List[Dict]) -> List[Dict]:
         else:
             merged[key] = dict(rec)
     # DCE 品种级 maxHand → 合约级 maxoq 传播
-    # 品种级 TradingParam.json 按 varietyId 返回 maxHand（如 l-F: maxHand=1000）
-    # 解析后 code 为 l.DCE / l-f.DCE（无合约月份数字），合约级如 l2607.DCE / l2607f.DCE
-    # 按字母前缀（品种代码 + 可选后缀）匹配传播
+    # 品种级 TradingParam.json 按 varietyId 返回 maxHand(如 l-F: maxHand=1000)
+    # 解析后 code 为 l.DCE / l-f.DCE(无合约月份数字),合约级如 l2607.DCE / l2607f.DCE
+    # 按字母前缀(品种代码 + 可选后缀)匹配传播
     dce_variety: dict[str, dict] = {}
     for rec in merged.values():
         code = rec.get("code", "")
@@ -981,10 +1003,14 @@ def merge_by_code_date(records: List[Dict]) -> List[Dict]:
                 if prefix in dce_variety:
                     vrec = dce_variety[prefix]
                     for k, v in vrec.items():
-                        if v is not None and rec.get(k) is None and k not in ("code", "date"):
+                        if (
+                            v is not None
+                            and rec.get(k) is None
+                            and k not in ("code", "date")
+                        ):
                             rec[k] = v
 
-    # OHLC 0 → None（通过 Modifier 做数据清洗）
+    # OHLC 0 → None(通过 Modifier 做数据清洗)
     for rec in merged.values():
         zero_price_to_none(rec)
 
@@ -1060,7 +1086,7 @@ _att_failures: list[dict] = []
 
 
 def clear_attachment_failures():
-    """清空附件失败列表（每次运行前调用）。"""
+    """清空附件失败列表(每次运行前调用)。"""
     _att_failures.clear()
 
 
@@ -1093,7 +1119,7 @@ def _extract_links(html, page_url):
         ext = Path(href).suffix.lower()
         if ext in (".pdf", ".xls", ".xlsx"):
             abs_url = urljoin(page_url, href)
-            # 从 URL 提取纯数字/字母 ID（去除中文和路径分隔符）
+            # 从 URL 提取纯数字/字母 ID(去除中文和路径分隔符)
             raw_name = unquote(abs_url.split("/")[-1].split("?")[0])
             url_id = re.sub(r"[^a-zA-Z0-9_.-]", "", Path(raw_name).stem)
             if not url_id:
@@ -1102,9 +1128,11 @@ def _extract_links(html, page_url):
     return results
 
 
-async def _download(url, save_dir, exchange="", date_str="", url_id="", session=None):
-    """下载附件，文件名格式: {exchange}_{date}_{url_id}.{ext}"""
-    import aiohttp
+async def _download(
+    url, save_dir, exchange="", date_str="",
+    url_id="", session=None,
+):
+    """下载附件,文件名格式: {exchange}_{date}_{url_id}.{ext}"""
     ext = Path(url).suffix or ".pdf"
     if exchange and date_str and url_id:
         fname = f"{exchange}_{date_str}_{url_id}{ext}"
@@ -1129,28 +1157,40 @@ async def _download(url, save_dir, exchange="", date_str="", url_id="", session=
 
 def _pdf_to_text(pdf_path):
     import fitz, base64, requests as _req
-    doc = fitz.open(str(pdf_path))
-    parts = []
-    for p in range(min(len(doc), 10)):
-        try:
-            pix = doc[p].get_pixmap(dpi=150)
-            b64 = base64.b64encode(pix.tobytes("png")).decode()
-            r = _req.post(_ZHIPU_URL,
-                headers={"Authorization": f"Bearer {_ZHIPU_KEY}",
-                         "Content-Type": "application/json"},
-                json={"model": _ZHIPU_VISION_MODEL, "messages": [{"role": "user",
-                    "content": [{"type": "image_url",
-                     "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                    {"type": "text", "text": "提取此页中与下单量、开仓手数、交易限额相关的文字，逐字输出。"}
-                ]}], "max_tokens": 1024, "temperature": 0}, timeout=60)
-            parts.append(r.json()["choices"][0]["message"]["content"]
-                        if r.status_code == 200 else "")
-        except Exception:
-            pass
-    page_count = min(len(doc), 10)
-    doc.close()
+    # 抑制 MuPDF 结构树警告(不影响文本提取和渲染)
+    old_warnings = fitz.TOOLS.mupdf_display_warnings(False)
+    try:
+        doc = fitz.open(str(pdf_path))
+        parts = []
+        for p in range(min(len(doc), 10)):
+            try:
+                pix = doc[p].get_pixmap(dpi=150)
+                b64 = base64.b64encode(pix.tobytes("png")).decode()
+                r = _req.post(_ZHIPU_URL,
+                    headers={"Authorization": f"Bearer {_ZHIPU_KEY}",
+                             "Content-Type": "application/json"},
+                    json={
+                    "model": _ZHIPU_VISION_MODEL,
+                    "messages": [{"role": "user",
+                        "content": [{"type": "image_url",
+                         "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                        {"type": "text", "text": (
+    "提取此页中与下单量、开仓手数、交易限额相关的文字,逐字输出。"
+)}
+                    ]}], "max_tokens": 1024, "temperature": 0}, timeout=60)
+                parts.append(r.json()["choices"][0]["message"]["content"]
+                            if r.status_code == 200 else "")
+            except Exception:
+                pass
+        page_count = min(len(doc), 10)
+        doc.close()
+    finally:
+        fitz.TOOLS.mupdf_display_warnings(old_warnings)
     result = "\n".join(parts)
-    _llm_logger.debug("PDF_PARSED %s: %s pages, %s chars", pdf_path.name, page_count, len(result))
+    _llm_logger.debug(
+    "PDF_PARSED %s: %s pages, %s chars",
+    pdf_path.name, page_count, len(result),
+)
     return result
 
 
@@ -1162,7 +1202,9 @@ def _xlsx_to_text(path):
         for sn in wb.sheetnames[:2]:
             ws = wb[sn]
             rows = [",".join(str(v) for v in r if v is not None)
-                    for r in list(ws.iter_rows(values_only=True))[:30] if any(r)]
+                    for r in list(ws.iter_rows(values_only=True))[:30]
+                    if any(r)
+                ]
             if rows:
                 out.append(f"[Sheet:{sn}]\n" + "\n".join(rows))
         wb.close()
@@ -1172,7 +1214,7 @@ def _xlsx_to_text(path):
 
 
 def _process_html(html, page_url=""):
-    """同步 HTML 预处理：提取正文 + 附件链接。放 executor 执行。"""
+    """同步 HTML 预处理:提取正文 + 附件链接。放 executor 执行。"""
     soup = BeautifulSoup(html, "html.parser")
     for t in soup(["script", "style", "nav", "header", "footer",
                    "noscript", "iframe"]):
@@ -1256,7 +1298,10 @@ async def parse_announcement_fields(
         try:
             if retry_i > 0:
                 delay = 2 ** retry_i
-                _llm_logger.debug("DS_RETRY [%s] %s: 第 %s/5 次, 等待 %ss", exchange, title[:80], retry_i + 1, delay)
+                _llm_logger.debug(
+            "DS_RETRY [%s] %s: 第 %s/5 次, 等待 %ss",
+            exchange, title[:80], retry_i + 1, delay,
+        )
                 await asyncio.sleep(delay)
             _llm_logger.debug("DS_REQ [%s] %s", exchange, title[:80])
             async with session.post(
@@ -1267,7 +1312,9 @@ async def parse_announcement_fields(
                       "messages": [{"role": "user", "content": prompt}],
                       "response_format": {"type": "json_object"},
                       "temperature": 0, "max_tokens": 393216},
-                timeout=aiohttp.ClientTimeout(total=600, connect=30, sock_read=300),
+                timeout=aiohttp.ClientTimeout(
+                total=600, connect=30, sock_read=300
+            ),
             ) as r:
                 r.raise_for_status()
                 raw = (await r.json())["choices"][0]["message"]["content"]
@@ -1295,7 +1342,10 @@ async def parse_announcement_fields(
     raw = raw.strip()
     data = json.loads(raw)
     items = data if isinstance(data, list) else data.get("items", [])
-    needs_review = False if isinstance(data, list) else bool(data.get("needs_review", False))
+    needs_review = (
+                    False if isinstance(data, list)
+                    else bool(data.get("needs_review", False))
+                )
     results = []
     for item in items:
         # 除 effective_date 外全部必填
