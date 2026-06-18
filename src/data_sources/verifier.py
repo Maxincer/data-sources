@@ -17,9 +17,9 @@ class CompareResult:
         self.total_missing_new = 0
         self.total_abnormal_missing_new = 0
         self.max_deviation = 0.0
-        self.sample_diffs: list[dict]] = []
-        self.sample_missing_in_new: list[dict]] = []
-        self.sample_missing_in_original: list[dict]] = []
+        self.sample_diffs: list[dict] = []
+        self.sample_missing_in_new: list[dict] = []
+        self.sample_missing_in_original: list[dict] = []
 
     @property
     def summary(self) -> dict:

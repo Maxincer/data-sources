@@ -342,7 +342,7 @@ def fix_dce_limit_prices(records: list) -> list:
             dce_records.append(rec)
 
     from collections import defaultdict
-    by_code: dict[str, list[dict]]] = defaultdict(list)
+    by_code: dict[str, list[dict]] = defaultdict(list)
     for rec in dce_records:
         by_code[rec["code"]].append(rec)
 
@@ -487,7 +487,7 @@ def _fix_margin_inherit(
         if code.endswith(exchange_suffix) and rec.get("long_margin") is not None:
             target_records.append(rec)
 
-    by_code: dict[str, list[dict]]] = defaultdict(list)
+    by_code: dict[str, list[dict]] = defaultdict(list)
     for rec in target_records:
         by_code[rec["code"]].append(rec)
 

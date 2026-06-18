@@ -131,7 +131,7 @@ def verify_settle_vs_close(record: dict) -> str | None:
 # Exchange-specific parsers
 # -------------------------------------------------------------------------
 
-def parse_directory(dirpath: Path) -> list[dict]]:
+def parse_directory(dirpath: Path) -> list[dict]:
     """Auto-discover and parse all raw files in data/raw/structured/."""
     records = []
     for fpath in sorted(dirpath.iterdir()):
@@ -145,7 +145,7 @@ def parse_directory(dirpath: Path) -> list[dict]]:
     return records
 
 
-def parse_file(fpath: Path) -> list[dict]]:
+def parse_file(fpath: Path) -> list[dict]:
     """
     Parse a single raw file and return list of record dicts.
     If verifier is provided, run business-logic checks and log issues.
@@ -202,7 +202,7 @@ def _exchange_suffix(exchange: str) -> str:
 # CFFEX market CSV (GBK, from hqsj)
 # -----------------------------------------------------------------------
 
-def _parse_cffex_market(fpath: Path) -> list[dict]]:
+def _parse_cffex_market(fpath: Path) -> list[dict]:
     """Parse CFFEX daily market data CSV (GBK)."""
     records = []
     date = fpath.name.split(".")[0]
@@ -239,7 +239,7 @@ def _parse_cffex_market(fpath: Path) -> list[dict]]:
 # CFFEX settlement CSV (GBK, from jscs)
 # -----------------------------------------------------------------------
 
-def _parse_cffex_settlement(fpath: Path) -> list[dict]]:
+def _parse_cffex_settlement(fpath: Path) -> list[dict]:
     """Parse CFFEX settlement parameters CSV (GBK).
 
     Line 0 is a title/date row, line 1 is actual headers.
@@ -271,7 +271,7 @@ def _parse_cffex_settlement(fpath: Path) -> list[dict]]:
 # SHFE / INE daily market data JSON
 # -----------------------------------------------------------------------
 
-def _parse_shfe_ine_daily(fpath: Path) -> list[dict]]:
+def _parse_shfe_ine_daily(fpath: Path) -> list[dict]:
     """Parse SHFE/INE kx*.dat daily market data JSON."""
     records = []
     date = fpath.name.split(".")[0]
@@ -318,7 +318,7 @@ def _parse_shfe_ine_daily(fpath: Path) -> list[dict]]:
 # SHFE / INE settlement JSON# SHFE / INE settlement JSON
 # -----------------------------------------------------------------------
 
-def _parse_shfe_ine_settlement(fpath: Path) -> list[dict]]:
+def _parse_shfe_ine_settlement(fpath: Path) -> list[dict]:
     """Parse SHFE/INE js*.dat settlement JSON."""
     records = []
     date = fpath.name.split(".")[0]
@@ -360,7 +360,7 @@ def _parse_shfe_ine_settlement(fpath: Path) -> list[dict]]:
 # CZCE daily market data TXT
 # -----------------------------------------------------------------------
 
-def _parse_czce_daily(fpath: Path) -> list[dict]]:
+def _parse_czce_daily(fpath: Path) -> list[dict]:
     """Parse CZCE daily market data pipe-delimited TXT."""
     records = []
     date = fpath.name.split(".")[0]
@@ -393,7 +393,7 @@ def _parse_czce_daily(fpath: Path) -> list[dict]]:
     return records
 
 
-def _parse_czce_settlement(fpath: Path) -> list[dict]]:
+def _parse_czce_settlement(fpath: Path) -> list[dict]:
     """Parse CZCE settlement parameters TXT (UTF-8).
 
     Columns: 合约代码|当日结算价|是否单边市|连续单边市天数|交易保证金率(%)|涨跌停板(%)
@@ -432,7 +432,7 @@ def _parse_czce_settlement(fpath: Path) -> list[dict]]:
 #          限价单最大下单量|市价单最大下单量
 # -----------------------------------------------------------------------
 
-def _parse_czce_tradepara(fpath: Path) -> list[dict]]:
+def _parse_czce_tradepara(fpath: Path) -> list[dict]:
     """Parse CZCE FutureTradeParam.txt (UTF-8)."""
     records = []
     date = fpath.name.split(".")[0]
@@ -468,7 +468,7 @@ def _parse_czce_tradepara(fpath: Path) -> list[dict]]:
 # DCE daily market data JSON
 # -----------------------------------------------------------------------
 
-def _parse_dce_daily(fpath: Path) -> list[dict]]:
+def _parse_dce_daily(fpath: Path) -> list[dict]:
     """Parse DCE daily market data JSON."""
     records = []
     date = fpath.name.split(".")[0]
@@ -501,7 +501,7 @@ def _parse_dce_daily(fpath: Path) -> list[dict]]:
 # DCE settlement JSON
 # -----------------------------------------------------------------------
 
-def _parse_dce_settlement(fpath: Path) -> list[dict]]:
+def _parse_dce_settlement(fpath: Path) -> list[dict]:
     """Parse DCE settlement parameters JSON."""
     records = []
     date = fpath.name.split(".")[0]
@@ -525,7 +525,7 @@ def _parse_dce_settlement(fpath: Path) -> list[dict]]:
 # GFEX daily market data JSON
 # -----------------------------------------------------------------------
 
-def _parse_gfex_daily(fpath: Path) -> list[dict]]:
+def _parse_gfex_daily(fpath: Path) -> list[dict]:
     """Parse GFEX daily market data JSON."""
     records = []
     date = fpath.name.split(".")[0]
@@ -564,7 +564,7 @@ def _parse_gfex_daily(fpath: Path) -> list[dict]]:
 # GFEX settlement JSON
 # -----------------------------------------------------------------------
 
-def _parse_gfex_settlement(fpath: Path) -> list[dict]]:
+def _parse_gfex_settlement(fpath: Path) -> list[dict]:
     """Parse GFEX settlement parameters JSON."""
     records = []
     date = fpath.name.split(".")[0]
@@ -591,7 +591,7 @@ def _parse_gfex_settlement(fpath: Path) -> list[dict]]:
 # File is GBK encoded
 # -----------------------------------------------------------------------
 
-def _parse_cffex_tradepara(fpath: Path) -> list[dict]]:
+def _parse_cffex_tradepara(fpath: Path) -> list[dict]:
     """Parse CFFEX trading parameters CSV (GBK)."""
     records = []
     date = fpath.name.split(".")[0]
@@ -621,7 +621,7 @@ def _parse_cffex_tradepara(fpath: Path) -> list[dict]]:
 #       SPEC_LONGMARGINRATIO, SPEC_SHORTMARGINRATIO, TRADINGDAY
 # -----------------------------------------------------------------------
 
-def _parse_shfe_ine_tradepara(fpath: Path, suffix: str) -> list[dict]]:
+def _parse_shfe_ine_tradepara(fpath: Path, suffix: str) -> list[dict]:
     records = []
     date = fpath.name.split(".")[0]
     with open(fpath, encoding="utf-8") as f:
@@ -660,7 +660,7 @@ def _parse_shfe_ine_tradepara(fpath: Path, suffix: str) -> list[dict]]:
 #       specBuyRate, selfTotBuyPosiQuota
 # -----------------------------------------------------------------------
 
-def _parse_dce_tradepara(fpath: Path) -> list[dict]]:
+def _parse_dce_tradepara(fpath: Path) -> list[dict]:
     records = []
     date = fpath.name.split(".")[0]
     with open(fpath, encoding="utf-8") as f:
@@ -687,7 +687,7 @@ def _parse_dce_tradepara(fpath: Path) -> list[dict]]:
     return records
 
 
-def _parse_dce_tradingparam(fpath: Path) -> list[dict]]:
+def _parse_dce_tradingparam(fpath: Path) -> list[dict]:
     """Parse DCE product-level tradingParam (varietyId + maxHand).
 
     Extracts maxHand → maxoq for all DCE products.
@@ -718,7 +718,7 @@ def _parse_dce_tradingparam(fpath: Path) -> list[dict]]:
 #       specBuyRate, selfTotBuyPosiQuota
 # -----------------------------------------------------------------------
 
-def _parse_gfex_tradepara(fpath: Path) -> list[dict]]:
+def _parse_gfex_tradepara(fpath: Path) -> list[dict]:
     records = []
     date = fpath.name.split(".")[0]
     with open(fpath, encoding="utf-8") as f:
@@ -745,7 +745,7 @@ def _parse_gfex_tradepara(fpath: Path) -> list[dict]]:
 # Keys: indexCode, indexName, latestClose
 # -----------------------------------------------------------------------
 
-def _parse_csi_market(fpath: Path) -> list[dict]]:
+def _parse_csi_market(fpath: Path) -> list[dict]:
     records = []
     date = fpath.name.split(".")[0]
     with open(fpath, encoding="utf-8") as f:
@@ -907,7 +907,7 @@ def _load_tick_map(date_str: str) -> dict[str, float]:
 
 def parse_all():
     """Parse all raw files and return (records, stats_summary)."""
-    all_records: list[dict]] = []
+    all_records: list[dict] = []
     all_stats = []
     for fpath in sorted(RAW_DIR.iterdir()):
         if not fpath.is_file() or fpath.suffix == ".jsonl":
@@ -928,7 +928,7 @@ def parse_all():
     return all_records, [s.stats_summary for s in all_stats]
 
 
-def merge_by_code_date(records: list[dict]], date_str: str) -> list[dict]]:
+def merge_by_code_date(records: list[dict], date_str: str) -> list[dict]:
     """Merge records with same (code, date), filling None from either."""
     merged: dict[str, dict] = {}
     for rec in records:
