@@ -1058,7 +1058,7 @@ class Fetcher:
     # -----------------------------------------------------------------
 
     PRODUCT_CONFIG_DIR = (
-        Path(os.environ.get("DATA_DIR", "./data")) / "raw" / "product_configs"
+        Path(os.environ["DATA_DIR"]) / "raw" / "product_configs"
     )
 
     def _fetch_exchange_product_config(self, task: Task) -> dict:
