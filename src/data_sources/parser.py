@@ -1106,8 +1106,12 @@ async def _download(
                 headers={"User-Agent": "Mozilla/5.0"},
             ) as r:
                 r.raise_for_status()
+                body = await r.read()
+                # 反爬 WAF 检测：JS challenge 页面 ≈ 几百字节，非真实 PDF
+                if len(body) < 5000 or b"EO_Bot_Ssid" in body:
+                    raise RuntimeError(f"WAF/bot challenge ({len(body)} bytes)")
                 tmp = local.with_suffix(local.suffix + ".tmp")
-                tmp.write_bytes(await r.read())
+                tmp.write_bytes(body)
                 tmp.rename(local)
             return local
         except Exception as e:

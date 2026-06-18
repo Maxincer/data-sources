@@ -139,6 +139,14 @@ def _check_download(html: str, exchange: str, aid: str, title: str, url: str = "
         ))
         return "响应体过短"
 
+    # 反爬 WAF 检测: EO_Bot_Ssid JS challenge
+    if "EO_Bot_Ssid" in html or "_0x649a" in html[:500]:
+        _download_failures.append(dict(
+            exchange=exchange, aid=aid, title=title[:60], url=url,
+            reason="WAF/bot challenge",
+        ))
+        return "WAF/bot challenge"
+
     # 仅检查 <title> 中的 404, 不扫描 body 关键词
     title_tag = re.search(r"<title>([^<]+)</title>", html)
     if title_tag and "404" in title_tag.group(1):
