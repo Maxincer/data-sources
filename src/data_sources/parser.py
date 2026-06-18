@@ -55,6 +55,20 @@ _ZHIPU_KEY = os.environ["ZHIPU_API_KEY"]
 _ZHIPU_URL = os.environ["ZHIPU_BASE_URL"]
 _ZHIPU_VISION_MODEL = os.environ["ZHIPU_VISION_MODEL"]
 
+# 单主机并发信号量，防 IP 级 WAF（如 gfex.com.cn 同 IP >1 并发即触发反爬）
+_HOST_SEM: dict[str, asyncio.Semaphore] = {}
+
+
+def _host_semaphore(url: str) -> asyncio.Semaphore:
+    """按 origin 返回信号量，gfex.com.cn → 1，其他 → 10。"""
+    from urllib.parse import urlparse
+    host = urlparse(url).hostname or ""
+    if host not in _HOST_SEM:
+        limit = 1 if "gfex" in host else 10
+        _HOST_SEM[host] = asyncio.Semaphore(limit)
+    return _HOST_SEM[host]
+
+
 
 
 
@@ -1101,19 +1115,20 @@ async def _download(
     last_err = None
     for attempt in range(3):
         try:
-            async with session.get(
-                url, timeout=aiohttp.ClientTimeout(total=300),
-                headers={"User-Agent": "Mozilla/5.0"},
-            ) as r:
-                r.raise_for_status()
-                body = await r.read()
-                # 反爬 WAF 检测：JS challenge 页面 ≈ 几百字节，非真实 PDF
-                if len(body) < 5000 or b"EO_Bot_Ssid" in body:
-                    raise RuntimeError(f"WAF/bot challenge ({len(body)} bytes)")
-                tmp = local.with_suffix(local.suffix + ".tmp")
-                tmp.write_bytes(body)
-                tmp.rename(local)
-            return local
+            async with _host_semaphore(url):
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=300),
+                    headers={"User-Agent": "Mozilla/5.0"},
+                ) as r:
+                    r.raise_for_status()
+                    body = await r.read()
+                    # 反爬 WAF 检测：JS challenge 页面 ≈ 几百字节，非真实 PDF
+                    if len(body) < 5000 or b"EO_Bot_Ssid" in body:
+                        raise RuntimeError(f"WAF/bot challenge ({len(body)} bytes)")
+                    tmp = local.with_suffix(local.suffix + ".tmp")
+                    tmp.write_bytes(body)
+                    tmp.rename(local)
+                return local
         except Exception as e:
             last_err = e
             if attempt < 2:
