@@ -327,14 +327,8 @@ def fix_dce_limit_prices(records: list) -> list:
     """修正 DCE 合约的涨跌停价，使用开盘限价口径。
 
     DCE 交易参数 API 每次返回的是**当日结算后生效**的涨跌停参数，
-    但这包含了节假日调整等非正常风控参数。
-    实际开盘时使用的限价应基于**前一交易日**的涨跌停比例。
-
-    同时修正保证金率（same issue）：
-      - 节假日调整日 margin 也上调，原表用的是调整前值
-      - 逻辑：date T 的 long_margin/short_margin = date T-1 API 原始值
+    需用前一交易日 API 原始值替代。无前日数据时置空并告警。
     """
-    # Collect DCE tradepara records, group by code
     dce_records = []
     for rec in records:
         code = rec.get("code", "")
@@ -348,6 +342,17 @@ def fix_dce_limit_prices(records: list) -> list:
 
     for code, recs in by_code.items():
         recs.sort(key=lambda r: r.get("date", ""))
+        if len(recs) < 2:
+            _logger.warning(
+                "DCE %s 无前日交易参数，涨跌停/保证金置空", code,
+            )
+            for rec in recs:
+                rec["maxup"] = None
+                rec["maxdown"] = None
+                rec["long_margin"] = None
+                rec["short_margin"] = None
+            continue
+
         prev = None
         for rec in recs:
             cur = {
@@ -356,20 +361,14 @@ def fix_dce_limit_prices(records: list) -> list:
                 "long_margin": rec.get("long_margin"),
                 "short_margin": rec.get("short_margin"),
             }
-
             if prev is not None:
-                # 开盘限价+保证金口径：date T 的值 = date T-1 API 原始值
-                # 已验证：250/250 DCE 20260429 = 20260428 API 原始值
                 rec["maxup"] = prev["maxup"]
                 rec["maxdown"] = prev["maxdown"]
                 if prev["long_margin"] is not None:
                     rec["long_margin"] = prev["long_margin"]
                     rec["short_margin"] = prev["short_margin"]
-
             prev = cur
 
-        # 到期合约（最后交易日被交易所摘牌，今日无TradingParams）
-        # 用前一天的涨跌停/保证金数据回填今日的 DailyMarket/Settlement 记录
         if prev is not None:
             for rec in records:
                 if rec.get("code") == code and rec.get("maxup") is None:
@@ -379,7 +378,6 @@ def fix_dce_limit_prices(records: list) -> list:
                         rec["long_margin"] = prev["long_margin"]
                         rec["short_margin"] = prev["short_margin"]
 
-    # Clean up internal fields
     for rec in records:
         rec.pop("_rise_limit_rate", None)
         rec.pop("_pre_settle", None)
@@ -414,14 +412,7 @@ def fix_gfe_margin(records: list) -> list:
 
 
 def fix_gfe_limit_prices(records: list) -> list:
-    """修正 GFE 合约的涨跌停价，使用开盘限价口径。
-
-    GFE 交易参数 API 永远返回最新快照，不支持按日期查询历史数据。
-    节假日调整后的涨跌停价不应在节后使用，需继承前一交易日的数据。
-
-    逻辑：按合约分组、按日期排序，date T 的 maxup/maxdown =
-          date T-1 的原始值。
-    """
+    """修正 GFE 合约的涨跌停价，使用开盘限价口径。无前日数据时置空并告警。"""
     from collections import defaultdict
 
     gfe_records = [
@@ -435,6 +426,15 @@ def fix_gfe_limit_prices(records: list) -> list:
 
     for _code, recs in by_code.items():
         recs.sort(key=lambda r: r.get("date", ""))
+        if len(recs) < 2:
+            _logger.warning(
+                "GFE %s 无前日涨跌停数据，maxup/maxdown 置空", _code,
+            )
+            for rec in recs:
+                rec["maxup"] = None
+                rec["maxdown"] = None
+            continue
+
         prev_maxup = None
         prev_maxdown = None
         for rec in recs:
@@ -473,12 +473,7 @@ def _fix_margin_inherit(
     exchange_suffix: str = "",
     _code_filter: str = "",
 ) -> list:
-    """通用保证金继承逻辑。
-
-    对指定交易所的记录，按合约代码分组后按日期排序，
-    若当日 margin 与前一交易日不同且变化超过阈值，
-    则继承前一交易日的 margin 值。
-    """
+    """通用保证金继承逻辑。无前日数据时置空并告警。"""
     from collections import defaultdict
 
     target_records = []
@@ -493,6 +488,16 @@ def _fix_margin_inherit(
 
     for code, recs in by_code.items():
         recs.sort(key=lambda r: r.get("date", ""))
+        if len(recs) < 2:
+            _logger.warning(
+                "%s %s 无前日保证金数据，long_margin/short_margin 置空",
+                exchange_suffix, code,
+            )
+            for rec in recs:
+                rec["long_margin"] = None
+                rec["short_margin"] = None
+            continue
+
         prev_lm = None
         prev_sm = None
         for rec in recs:
