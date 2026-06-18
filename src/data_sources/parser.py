@@ -1238,7 +1238,7 @@ def _pad_eff_date(eff_date: str) -> str:
 async def parse_announcement_fields(
     text: str, links: list, exchange: str, title: str,
     publish_date: str, category: str = "",
-    attachment_dir=None, session=None,
+    attachment_dir=None, session=None, aid: str = "",
 ) -> list[dict]:
     """异步 LLM 调用解析 minoq/maxoq。text 为预处理后的正文。"""
     # 附件下载
@@ -1251,6 +1251,7 @@ async def parse_announcement_fields(
                                  session=session)
             except BaseException as e:
                 _att_failures.append({
+                    "aid": aid,
                     "exchange": exchange,
                     "title": title,
                     "url": link["url"],
