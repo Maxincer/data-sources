@@ -1060,7 +1060,7 @@ _ZHIPU_KEY = os.environ["ZHIPU_API_KEY"]
 _ZHIPU_URL = os.environ["ZHIPU_BASE_URL"]
 _ZHIPU_VISION_MODEL = os.environ["ZHIPU_VISION_MODEL"]
 
-_PROMPT_DIR = Path(os.environ["DATA_DIR"])
+_PROMPT_DIR = Path(__file__).parent / "prompts"
 
 
 def _load_prompt(name: str) -> str:

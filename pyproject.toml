@@ -24,5 +24,8 @@ dependencies = [
 where = ["src"]
 include = ["data_sources*"]
 
+[tool.setuptools.package-data]
+data_sources = ["prompts/*"]
+
 [tool.setuptools]
 script-files = ["scripts/data_sources_pipeline"]

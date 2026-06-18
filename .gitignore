@@ -31,7 +31,6 @@ logs/
 # Data: keep only trade_dates.txt
 /data/*
 !/data/trade_dates.txt
-!/data/extract_fields.txt
 .venv*
 
 # Offline deploy packages (large binaries, committed separately or scp'd)
