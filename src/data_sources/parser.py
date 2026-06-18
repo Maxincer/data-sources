@@ -1133,7 +1133,7 @@ def _pdf_to_text(pdf_path):
                     parts.append(r.json()["choices"][0]["message"]["content"]
                                 if r.status_code == 200 else "")
                 except Exception:
-                    pass
+                    _llm_logger.debug("PDF 单页提取失败: %s p%d", pdf_path.name, p + 1)
             page_count = min(len(doc), 10)
     finally:
         fitz.TOOLS.mupdf_display_warnings(old_warnings)
@@ -1162,6 +1162,7 @@ def _xlsx_to_text(path):
                 out.append(f"[Sheet:{sn}]\n" + "\n".join(rows))
         return "\n".join(out)
     except Exception:
+        _llm_logger.warning("XLSX 解析失败: %s", path.name)
         return ""
     finally:
         if wb is not None:
@@ -1238,7 +1239,7 @@ async def parse_announcement_fields(
                          else _xlsx_to_text(local))
                     atext += f"\n[附件:{local.name}]\n{t}\n"
                 except Exception:
-                    pass
+                    _llm_logger.debug("附件解析失败: %s", local.name)
 
     full_text = text + atext
 
