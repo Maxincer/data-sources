@@ -1097,15 +1097,24 @@ async def _download(
     if local.exists():
         return local
     save_dir.mkdir(parents=True, exist_ok=True)
-    async with session.get(
-        url, timeout=aiohttp.ClientTimeout(total=30),
-        headers={"User-Agent": "Mozilla/5.0"},
-    ) as r:
-        r.raise_for_status()
-        tmp = local.with_suffix(local.suffix + ".tmp")
-        tmp.write_bytes(await r.read())
-        tmp.rename(local)
-    return local
+
+    last_err = None
+    for attempt in range(3):
+        try:
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=60),
+                headers={"User-Agent": "Mozilla/5.0"},
+            ) as r:
+                r.raise_for_status()
+                tmp = local.with_suffix(local.suffix + ".tmp")
+                tmp.write_bytes(await r.read())
+                tmp.rename(local)
+            return local
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                await asyncio.sleep(2 * (attempt + 1))
+    raise last_err
 
 
 def _pdf_to_text(pdf_path):
