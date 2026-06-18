@@ -1102,7 +1102,7 @@ async def _download(
     for attempt in range(3):
         try:
             async with session.get(
-                url, timeout=aiohttp.ClientTimeout(total=60),
+                url, timeout=aiohttp.ClientTimeout(total=300),
                 headers={"User-Agent": "Mozilla/5.0"},
             ) as r:
                 r.raise_for_status()
