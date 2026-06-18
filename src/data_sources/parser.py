@@ -19,6 +19,9 @@ from pathlib import Path
 import aiohttp
 from bs4 import BeautifulSoup
 
+import openpyxl
+from mxz_utils.logging_config import get_logger
+
 from data_sources.modifier import (
     safe_ceil,
     safe_floor,
@@ -47,6 +50,12 @@ DB_COLS = [
     "volume", "amt", "oi", "settle", "maxup", "maxdown",
     "if_basis", "long_margin", "short_margin", "minoq", "maxoq",
 ]
+
+_ZHIPU_KEY = os.environ["ZHIPU_API_KEY"]
+_ZHIPU_URL = os.environ["ZHIPU_BASE_URL"]
+_ZHIPU_VISION_MODEL = os.environ["ZHIPU_VISION_MODEL"]
+
+
 
 
 class ParseStats:
@@ -895,12 +904,6 @@ def _load_tick_map(date_str: str) -> dict[str, float]:
             tick_map[pgid] = tick
     return tick_map
 
-
-# -----------------------------------------------------------------------
-# Utilities
-# -----------------------------------------------------------------------
-
-
 # -----------------------------------------------------------------------
 # Orchestration
 # -----------------------------------------------------------------------
@@ -1029,8 +1032,6 @@ def merge_by_code_date(records: list[dict], date_str: str) -> list[dict]:
 #  LLM 提取 maxoq / minoq
 # ══════════════════════════════════════════════════════
 
-from mxz_utils.logging_config import get_logger
-
 _llm_logger = get_logger(
     name="AnalyseAnnouncementsService",
     level="DEBUG",
@@ -1056,16 +1057,10 @@ def get_attachment_failures() -> list[dict]:
     return list(_att_failures)
 
 
-_ZHIPU_KEY = os.environ["ZHIPU_API_KEY"]
-_ZHIPU_URL = os.environ["ZHIPU_BASE_URL"]
-_ZHIPU_VISION_MODEL = os.environ["ZHIPU_VISION_MODEL"]
-
-_PROMPT_DIR = Path(__file__).parent / "prompts"
-
-
 def _load_prompt(name: str) -> str:
-    """加载 prompts/ 目录下的提示词模板。"""
-    return (_PROMPT_DIR / name).read_text(encoding="utf-8")
+    return (
+        Path(__file__).parent / "prompts" / name
+    ).read_text(encoding="utf-8")
 
 
 def _extract_links(html, page_url):
@@ -1151,21 +1146,26 @@ def _pdf_to_text(pdf_path):
 
 
 def _xlsx_to_text(path):
-    import openpyxl
+    wb = None
     try:
-        with openpyxl.load_workbook(str(path), read_only=True, data_only=True) as wb:
-            out = []
-            for sn in wb.sheetnames[:2]:
-                ws = wb[sn]
-                rows = [",".join(str(v) for v in r if v is not None)
-                        for r in list(ws.iter_rows(values_only=True))[:30]
-                        if any(r)
-                    ]
-                if rows:
-                    out.append(f"[Sheet:{sn}]\n" + "\n".join(rows))
-            return "\n".join(out)
+        wb = openpyxl.load_workbook(
+            str(path), read_only=True, data_only=True
+        )
+        out = []
+        for sn in wb.sheetnames[:2]:
+            ws = wb[sn]
+            rows = [",".join(str(v) for v in r if v is not None)
+                    for r in list(ws.iter_rows(values_only=True))[:30]
+                    if any(r)
+                ]
+            if rows:
+                out.append(f"[Sheet:{sn}]\n" + "\n".join(rows))
+        return "\n".join(out)
     except Exception:
         return ""
+    finally:
+        if wb is not None:
+            wb.close()
 
 
 def _process_html(html, page_url=""):
