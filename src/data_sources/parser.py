@@ -1060,61 +1060,13 @@ _ZHIPU_KEY = os.environ["ZHIPU_API_KEY"]
 _ZHIPU_URL = os.environ["ZHIPU_BASE_URL"]
 _ZHIPU_VISION_MODEL = os.environ["ZHIPU_VISION_MODEL"]
 
-_EXTRACT_FIELDS_PROMPT = """\
-按如下要求从最后的公告内容中提取如下字段值，输出JSON。
+_PROMPT_DIR = Path(os.environ["DATA_DIR"])
 
-字段定义
-- maxoq: 期货合约限价指令每次最大开仓下单手数
-- minoq: 期货合约限价指令每次最小开仓下单手数
-- needs_review: 是否需要人工处理，是：1，否：0
-- product_code 是品种代码（仅字母部分），security_id 是合约代码（含月份）
-- field 必须是 "minoq" 或 "maxoq" 之一
 
-输出 schema（每个公告一条）：
-{
-  "items": [
-    {
-      "product_code": "品种代码（仅字母，如PS、LC、IF；通用规则填ALL）",
-      "security_id": "合约代码（如PS2705、LC2706；通用规则填ALL）",
-      "field": "minoq 或 maxoq",
-      "value": 手数（整数）,
-      "effective_date": "生效日期YYYYMMDD",
-      "evidence": "逐字摘录的公告原文"
-    }
-  ],
-  "needs_review": 1或0
-}
-无相关信息时返回 {"items":[]}
+def _load_prompt(name: str) -> str:
+    """加载 prompts/ 目录下的提示词模板。"""
+    return (_PROMPT_DIR / name).read_text(encoding="utf-8")
 
-minoq与maxoq的推断规则：
-1. 只提取期货合约相关要素，不提取期权合约的
-2. 交易指令包括限价指令和市价指令两种形式，即限价指令是交易指令的一种，对交易指令的限制同样适用于限价指令。
-3. 下单包括开仓下单和平仓下单两种形式
-4. minoq和maxoq仅针对每笔指令的下单手数而不是当日指令的下单手数
-5. 注意区分"每次XX下单手数"和"每日XX下单手数"，我们要提取的是"每次XX下单手数"
-6. 如原文仅表述"每次最小下单数量为N手"而未明确"开仓"， 应推断为"每次最小开仓下单数量为N手"（minoq=N）
-7. 如原文表述"交易指令每次最大下单数量为N手"， 应提取为 maxoq=N（限价指令⊂交易指令）
-8. 原文表述"各合约"、"所有合约"、"全部合约"时，要重点考虑 security_id 是否应该填 ALL
-9. 当公告类别为general或product时，要重点考虑字段值的约束对象是否为ALL，可能会有如下情况：
-    - general(交易所规则): 规则适用于所有品种所有合约 → product_code=ALL, security_id=ALL
-    - product(品种规则): 规则适用于该品种所有合约 → product_code=具体品种, security_id=ALL
-
-needs_review推断规则（重要）：
-1. 仅当公告涉及以下三类变更时才标记为 true，否则 false：
-    1. 最小变动价位的调整
-    2. 涨停价/跌停价的取整算法变更（如四舍五入规则、精度变更等）
-    3. 上一日结算价用于计算涨跌停价时的调整方法变更
-2. 不关注的变更：合约乘数、手续费、保证金比例、持仓限额等。
-
-evidence推断规则：
-- 必须逐字摘录公告原文，不可改写、不可缩写、不可省略
-- 用原文直接支持 minoq/maxoq 的提取结论
-
-不提取：
-- 持仓限额、单日开仓限额、保证金、涨跌停板
-- 非限价指令的下单限制（如市价指令、套利指令等）
-- 期权合约的下单限制（如xxx期权、看涨期权、看跌期权、行权价等）
-"""
 
 def _extract_links(html, page_url):
     from urllib.parse import urljoin, unquote
@@ -1291,7 +1243,7 @@ async def parse_announcement_fields(
     full_text = text + atext
 
     prompt = (
-        _EXTRACT_FIELDS_PROMPT
+        _load_prompt("extract_fields.txt")
         + f"\n交易所:{exchange} 发布日期:{publish_date} 类别:{category}"
         + f"\n\n公告内容:\n\n{full_text}"
     )
