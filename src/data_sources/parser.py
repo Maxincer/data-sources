@@ -1254,7 +1254,7 @@ async def parse_announcement_fields(
                     "exchange": exchange,
                     "title": title,
                     "url": link["url"],
-                    "error": str(e),
+                    "error": f"{type(e).__name__}: {e}",
                 })
                 _llm_logger.warning(
                     "附件下载失败 [%s] %s → %s: %s",
