@@ -1289,11 +1289,19 @@ def _ine_classify(title: str) -> str:
 
 def _ine_extract_list(page) -> list[tuple[str, str]]:
     """在 Playwright page 中提取列表页链接, 返回 [(href, title), ...]."""
-    html = page.content()
-    return re.findall(
-        r'<a[^>]*href="\./(\d{6}/t\d{8}_\d+\.html)"[^>]*>([^<]+)</a>',
-        html,
-    )
+    for attempt in range(3):
+        try:
+            page.wait_for_load_state("domcontentloaded")
+            html = page.content()
+            return re.findall(
+                r'<a[^>]*href="\./(\d{6}/t\d{8}_\d+\.html)"[^>]*>([^<]+)</a>',
+                html,
+            )
+        except Exception:
+            if attempt < 2:
+                time.sleep(1)
+            else:
+                raise
 
 
 def _ine_extract_rules(page) -> list[dict]:
@@ -1518,13 +1526,25 @@ def _shfe_article_id(url: str) -> str:
 def _shfe_extract_list(
     page,
 ) -> list[tuple[str, str]]:
-    """在 Playwright page 中访问列表页, 返回 [(href, title), ...]."""
-    html = page.content()
-    return re.findall(
-        r'<a[^>]*href="\./(\d{6}/t\d{8}_\d+\.html)"'
-        r'[^>]*>([^<]+)</a>',
-        html,
-    )
+    """在 Playwright page 中访问列表页, 返回 [(href, title), ...].
+
+    page.content() 可能在页面仍有后台导航时抛出 Unable to retrieve content,
+    加 wait_for_load_state + 重试兜底。
+    """
+    for attempt in range(3):
+        try:
+            page.wait_for_load_state("domcontentloaded")
+            html = page.content()
+            return re.findall(
+                r'<a[^>]*href="\./(\d{6}/t\d{8}_\d+\.html)"'
+                r'[^>]*>([^<]+)</a>',
+                html,
+            )
+        except Exception:
+            if attempt < 2:
+                time.sleep(1)
+            else:
+                raise
 
 
 def _shfe_extract_rules(page) -> list[dict]:
