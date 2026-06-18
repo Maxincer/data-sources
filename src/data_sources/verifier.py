@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
-"""
-Data quality verification for downloaded settlement files.
-
-Usage:
-    python3 -m data_sources.verifier               # full comparison, all dates
-    python3 -m data_sources.verifier 20260429       # comparison for specific date
-"""
-
 import json
-from typing import Dict, List, Optional
-
 import pymysql.cursors
 
 from data_sources.db import get_connection, resolve_config
@@ -28,12 +17,12 @@ class CompareResult:
         self.total_missing_new = 0
         self.total_abnormal_missing_new = 0
         self.max_deviation = 0.0
-        self.sample_diffs: List[Dict] = []
-        self.sample_missing_in_new: List[Dict] = []
-        self.sample_missing_in_original: List[Dict] = []
+        self.sample_diffs: list[dict]] = []
+        self.sample_missing_in_new: list[dict]] = []
+        self.sample_missing_in_original: list[dict]] = []
 
     @property
-    def summary(self) -> Dict:
+    def summary(self) -> dict:
         # 按偏差降序排列
         sorted_samples = sorted(self.sample_diffs,
                                 key=lambda x: x.get("ratio", 0),
@@ -91,7 +80,7 @@ class Verifier:
     def check_size_deviation(
         self,
         current_size: int,
-        previous_size: Optional[int],
+        previous_size: int | None,
         threshold_percent: float = 50.0,
     ) -> tuple[bool, str]:
         """
@@ -109,7 +98,7 @@ class Verifier:
             )
         return True, "OK"
 
-    def get_previous_size(self, task) -> Optional[int]:
+    def get_previous_size(self, task) -> int | None:
         """
         Find the file size of the most recent previous fetch
         for the same data product (exchange + description + suffix).
@@ -149,7 +138,7 @@ class Verifier:
     def verify_response(
         self,
         content: bytes,
-        previous_size: Optional[int] = None,
+        previous_size: int | None = None,
     ) -> tuple[bool, str]:
         """
         Run all fetcher-side checks.
@@ -196,7 +185,7 @@ class Verifier:
 
     def get_field_stats(self, target_date: str,
                         table: str = "t_futures_info_exchange",
-                        config_override: dict | None = None) -> Dict:
+                        config_override: dict | None = None) -> dict:
         """
         Get field valid/missing stats for a given table.
 
@@ -206,7 +195,7 @@ class Verifier:
             config_override: optional dict to override DB host/user/password
 
         Returns:
-            Dict[exchange][field] = {total, non_null, null_pct}
+            dict[exchange][field] = {total, non_null, null_pct}
         """
         conn = self._get_conn(config_override)
         db = self._get_db(config_override)
@@ -222,9 +211,9 @@ class Verifier:
                 exchanges = [r["ex"] for r in cur.fetchall()]
 
                 fields = [
-                    "code", "date", "open", "high", "low", "close",
-                    "volume", "amt", "oi", "settle", "maxup", "maxdown",
-                    "if_basis", "long_margin", "short_margin", "minoq", "maxoq",
+                    "code", "date", "open", "high", "low", "close", "volume",
+                    "amt", "oi", "settle", "maxup", "maxdown", "if_basis",
+                    "long_margin", "short_margin", "minoq", "maxoq",
                 ]
 
                 result = {}
@@ -266,7 +255,7 @@ class Verifier:
 
     def get_abnormal_nulls(self, target_date: str,
                            config_override: dict | None = None,
-                           ref_config_override: dict | None = None) -> Dict[str, list]:
+                           ref_config_override: dict | None = None) -> dict[str, list]:
         """
         获取异常空值明细：字段缺失且 amt≠0 的记录。
 
@@ -276,7 +265,7 @@ class Verifier:
             ref_config_override: 旧表 DB 配置 (默认同新表)
 
         Returns:
-            Dict[exchange] = [{code, open, high, low, close, amt, ...}] 按 amt 降序
+            dict[exchange] = [{code, open, high, low, close, amt, ...}] 按 amt 降序
         """
         conn = self._get_conn(config_override)
         db = self._get_db(config_override)
@@ -581,11 +570,11 @@ class Verifier:
 
     def _format_summary(
         self,
-        exchange_counts: Dict,
-        field_results: Dict[str, Dict[str, CompareResult]],
-        missing_records: List,
-        extra_records: List,
-        target_date: Optional[str] = None,
+        exchange_counts: dict,
+        field_results: dict[str, dict[str, CompareResult]],
+        missing_records: list,
+        extra_records: list,
+        target_date: str | None = None,
     ) -> str:
         """Format a human-readable comparison summary."""
         lines = []

@@ -291,7 +291,7 @@ def write_trade_date(date_str: str, table: str,
         logger.info("无数据可处理")
         return 0, [s.stats_summary for s in stats_list]
 
-    records = merge_by_code_date(records)
+    records = merge_by_code_date(records, date_str)
     records = inject_order_limits(records)  # 外部 CSV → minoq/maxoq 合并
     records = _apply_modifiers(records)
 

@@ -11,8 +11,6 @@ from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import List, Optional
-
 
 import requests
 
@@ -53,7 +51,7 @@ class Reporter:
             os.environ["LOG_DIR"], "Reporter",
         )
 
-    def task_report(self, tasks: List[Task], trade_date: str) -> None:
+    def task_report(self, tasks: list[Task], trade_date: str) -> None:
         """Send a Markdown table of file size changes."""
         if not tasks:
             return
@@ -86,8 +84,8 @@ class Reporter:
         self, date_str: str, *,
         skip_table_compare: bool = False,
         skip_wind: bool = False,
-        sender: Optional[str] = None,
-        email_recipients: Optional[list[str]] = None,
+        sender: str | None = None,
+        email_recipients: list[str] | None = None,
     ) -> None:
         """Generate daily data verification report.
 
@@ -162,8 +160,8 @@ class Reporter:
 
     def send_email(
         self, date_str: str,
-        sender: Optional[str] = None,
-        recipients: Optional[list[str]] = None,
+        sender: str | None = None,
+        recipients: list[str] | None = None,
     ) -> None:
         """快捷方式：只发邮件。"""
         self.generate_daily(date_str,sender=sender,email_recipients=recipients)
@@ -231,7 +229,7 @@ class Reporter:
             resp = requests.post(_FEISHU_WEBHOOK, json=payload, timeout=10)
             resp.raise_for_status()
         except Exception as e:
-            print(f"[WARN] Failed to send Feishu message: {e}")
+            logging.warning("Failed to send Feishu message: %s", e)
 
     @staticmethod
     def _build_announcement_review_section(date_str: str) -> str | None:

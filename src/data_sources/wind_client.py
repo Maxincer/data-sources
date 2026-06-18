@@ -5,8 +5,6 @@ in one RPC call. Only available on machines with cpp_py installed
 (e.g. db201, server202).
 """
 
-from typing import Optional
-
 import os
 
 from data_sources.modifier import czc_to_wind_code
@@ -36,7 +34,7 @@ def _ensure_connected() -> bool:
 
 def fetch_wind_data(
     target_date: str,
-    fields: Optional[list[str]] = None,
+    fields: list[str] | None = None,
 ) -> list[dict]:
     """Fetch Wind WSS snapshot for all active futures contracts.
 

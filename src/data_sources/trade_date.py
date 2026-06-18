@@ -16,11 +16,11 @@ Shell 使用示例:
 from bisect import bisect_left, bisect_right
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 import os
 
 
 DATA_DIR = Path(os.environ["DATA_DIR"])
+_CACHE: list[str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -29,28 +29,26 @@ DATA_DIR = Path(os.environ["DATA_DIR"])
 
 
 def load(force: bool = False) -> list[str]:
-    """
-    读取交易日历文件，返回升序字符串列表。
+    """读取交易日历文件，返回升序字符串列表。
 
-    模块级缓存：通过函数属性 load._cache 实现，首次调用后驻留内存。
-    设置 force=True 可强制重新读取文件（手工改数据后使用）。
+    模块级 _CACHE 变量缓存，首次调用后驻留内存。
+    force=True 可强制重新读取（手工改数据后使用）。
     """
-    if not force:
-        cache = getattr(load, "_cache", None)
-        if cache is not None:
-            return cache
+    global _CACHE
+    if not force and _CACHE is not None:
+        return _CACHE
 
     filepath = DATA_DIR / "trade_dates.txt"
     if not filepath.exists():
-        load._cache = []
+        _CACHE = []
         return []
 
     with open(filepath, "r", encoding="utf-8") as f:
-        load._cache = [line.strip() for line in f if line.strip()]
-    return load._cache
+        _CACHE = [line.strip() for line in f if line.strip()]
+    return _CACHE
 
 
-def prev_trading_date(date_or_str) -> Optional[str]:
+def prev_trading_date(date_or_str) -> str | None:
     """
     查找给定日期之前的最后一个交易日（不含自身）。
     """
@@ -64,7 +62,7 @@ def prev_trading_date(date_or_str) -> Optional[str]:
     return trade_dates[idx - 1] if idx > 0 else None
 
 
-def nearest(date_or_str) -> Optional[str]:
+def nearest(date_or_str) -> str | None:
     """
     向前查找最近交易日（含自身）。
     """
@@ -97,7 +95,7 @@ def is_trading(date_or_str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _normalize(d) -> Optional[str]:
+def _normalize(d) -> str | None:
     """统一输入为 YYYYMMDD 字符串，非法返回 None。"""
     if isinstance(d, str):
         d = d.replace("-", "")

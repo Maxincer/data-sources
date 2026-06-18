@@ -16,8 +16,6 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
-
 import aiohttp
 from bs4 import BeautifulSoup
 
@@ -26,7 +24,6 @@ from data_sources.modifier import (
     safe_floor,
     calc_shfe_ine_limit_prices,
     zero_price_to_none,
-    _set_product_exchange_map,
     _is_shfe_product,
     _is_ine_product,
 )
@@ -59,10 +56,10 @@ class ParseStats:
         self.exchange = exchange
         self.data_type = data_type
         self.total = 0                     # total parsed records
-        self.missing: Dict[str, int] = {}  # field -> count of missing values
-        self.errors: List[str] = []        # error messages
+        self.missing: dict[str, int] = {}  # field -> count of missing values
+        self.errors: list[str] = []        # error messages
 
-    def add_record(self, record: Dict):
+    def add_record(self, record: dict):
         """Count a record and its missing fields."""
         self.total += 1
         for col in DB_COLS:
@@ -80,7 +77,7 @@ class ParseStats:
         self.errors.extend(other.errors)
 
     @property
-    def stats_summary(self) -> Dict:
+    def stats_summary(self) -> dict:
         # Fields that are naturally absent for this exchange (not an anomaly)
         _EXPECTED_NULLS = {
             "CFFEX": set(),
@@ -107,7 +104,7 @@ class ParseStats:
 # Verification helpers
 # -------------------------------------------------------------------------
 
-def verify_price_order(record: Dict) -> Optional[str]:
+def verify_price_order(record: dict) -> str | None:
     """Check open/high/low/close price ordering."""
     o, h, l, c = [record.get(k) for k in ("open", "high", "low", "close")]
     if o is not None and h is not None and l is not None:
@@ -120,7 +117,7 @@ def verify_price_order(record: Dict) -> Optional[str]:
     return None
 
 
-def verify_settle_vs_close(record: Dict) -> Optional[str]:
+def verify_settle_vs_close(record: dict) -> str | None:
     """Check settle is close to close (within 5%)."""
     s, c = record.get("settle"), record.get("close")
     if s is not None and c is not None and c != 0:
@@ -134,7 +131,7 @@ def verify_settle_vs_close(record: Dict) -> Optional[str]:
 # Exchange-specific parsers
 # -------------------------------------------------------------------------
 
-def parse_directory(dirpath: Path) -> List[Dict]:
+def parse_directory(dirpath: Path) -> list[dict]]:
     """Auto-discover and parse all raw files in data/raw/structured/."""
     records = []
     for fpath in sorted(dirpath.iterdir()):
@@ -148,7 +145,7 @@ def parse_directory(dirpath: Path) -> List[Dict]:
     return records
 
 
-def parse_file(fpath: Path) -> List[Dict]:
+def parse_file(fpath: Path) -> list[dict]]:
     """
     Parse a single raw file and return list of record dicts.
     If verifier is provided, run business-logic checks and log issues.
@@ -205,10 +202,10 @@ def _exchange_suffix(exchange: str) -> str:
 # CFFEX market CSV (GBK, from hqsj)
 # -----------------------------------------------------------------------
 
-def _parse_cffex_market(fpath: Path) -> List[Dict]:
+def _parse_cffex_market(fpath: Path) -> list[dict]]:
     """Parse CFFEX daily market data CSV (GBK)."""
     records = []
-    date = _extract_date_from_filename(fpath)
+    date = fpath.name.split(".")[0]
     with open(fpath, encoding="gbk", errors="replace") as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -242,14 +239,14 @@ def _parse_cffex_market(fpath: Path) -> List[Dict]:
 # CFFEX settlement CSV (GBK, from jscs)
 # -----------------------------------------------------------------------
 
-def _parse_cffex_settlement(fpath: Path) -> List[Dict]:
+def _parse_cffex_settlement(fpath: Path) -> list[dict]]:
     """Parse CFFEX settlement parameters CSV (GBK).
 
     Line 0 is a title/date row, line 1 is actual headers.
     Columns: 期货合约,合约多头保证金标准,合约空头保证金标准,...
     """
     records = []
-    date = _extract_date_from_filename(fpath)
+    date = fpath.name.split(".")[0]
     with open(fpath, encoding="gbk", errors="replace") as f:
         lines = f.read().strip().split("\n")
     reader = csv.DictReader(lines[1:])
@@ -274,10 +271,10 @@ def _parse_cffex_settlement(fpath: Path) -> List[Dict]:
 # SHFE / INE daily market data JSON
 # -----------------------------------------------------------------------
 
-def _parse_shfe_ine_daily(fpath: Path) -> List[Dict]:
+def _parse_shfe_ine_daily(fpath: Path) -> list[dict]]:
     """Parse SHFE/INE kx*.dat daily market data JSON."""
     records = []
-    date = _extract_date_from_filename(fpath)
+    date = fpath.name.split(".")[0]
     name = fpath.name
     exchange_code = "SHF" if "SHFE" in name else "INE"
     with open(fpath, encoding="utf-8") as f:
@@ -321,10 +318,10 @@ def _parse_shfe_ine_daily(fpath: Path) -> List[Dict]:
 # SHFE / INE settlement JSON# SHFE / INE settlement JSON
 # -----------------------------------------------------------------------
 
-def _parse_shfe_ine_settlement(fpath: Path) -> List[Dict]:
+def _parse_shfe_ine_settlement(fpath: Path) -> list[dict]]:
     """Parse SHFE/INE js*.dat settlement JSON."""
     records = []
-    date = _extract_date_from_filename(fpath)
+    date = fpath.name.split(".")[0]
     name = fpath.name
     exchange_code = "SHF" if "SHFE" in name else "INE"
     with open(fpath, encoding="utf-8") as f:
@@ -363,10 +360,10 @@ def _parse_shfe_ine_settlement(fpath: Path) -> List[Dict]:
 # CZCE daily market data TXT
 # -----------------------------------------------------------------------
 
-def _parse_czce_daily(fpath: Path) -> List[Dict]:
+def _parse_czce_daily(fpath: Path) -> list[dict]]:
     """Parse CZCE daily market data pipe-delimited TXT."""
     records = []
-    date = _extract_date_from_filename(fpath)
+    date = fpath.name.split(".")[0]
     with open(fpath, encoding="utf-8") as f:
         lines = f.read().strip().split("\n")
         for line in lines[2:]:
@@ -396,16 +393,13 @@ def _parse_czce_daily(fpath: Path) -> List[Dict]:
     return records
 
 
-# -----------------------------------------------------------------------
-
-def _parse_czce_settlement(fpath: Path) -> List[Dict]:
+def _parse_czce_settlement(fpath: Path) -> list[dict]]:
     """Parse CZCE settlement parameters TXT (UTF-8).
 
-    Columns: \u5408\u7ea6\u4ee3\u7801|\u5f53\u65e5\u7ed3\u7b97\u4ef7|\u662f\u5426\u5355\u8fb9\u5e02|
-             \u8fde\u7eed\u5355\u8fb9\u5e02\u5929\u6570|\u4ea4\u6613\u4fdd\u8bc1\u91d1\u7387(%)|\u6da8\u8dcc\u505c\u677f(%)|
+    Columns: 合约代码|当日结算价|是否单边市|连续单边市天数|交易保证金率(%)|涨跌停板(%)
     """
     records = []
-    date = _extract_date_from_filename(fpath)
+    date = fpath.name.split(".")[0]
     with open(fpath, encoding="utf-8") as f:
         lines = f.read().strip().split("\n")
         for line in lines[2:]:
@@ -438,10 +432,10 @@ def _parse_czce_settlement(fpath: Path) -> List[Dict]:
 #          限价单最大下单量|市价单最大下单量
 # -----------------------------------------------------------------------
 
-def _parse_czce_tradepara(fpath: Path) -> List[Dict]:
+def _parse_czce_tradepara(fpath: Path) -> list[dict]]:
     """Parse CZCE FutureTradeParam.txt (UTF-8)."""
     records = []
-    date = _extract_date_from_filename(fpath)
+    date = fpath.name.split(".")[0]
     with open(fpath, encoding="utf-8") as f:
         lines = f.read().strip().split("\n")
     for line in lines[2:]:
@@ -474,10 +468,10 @@ def _parse_czce_tradepara(fpath: Path) -> List[Dict]:
 # DCE daily market data JSON
 # -----------------------------------------------------------------------
 
-def _parse_dce_daily(fpath: Path) -> List[Dict]:
+def _parse_dce_daily(fpath: Path) -> list[dict]]:
     """Parse DCE daily market data JSON."""
     records = []
-    date = _extract_date_from_filename(fpath)
+    date = fpath.name.split(".")[0]
     with open(fpath, encoding="utf-8") as f:
         data = json.load(f)
     for item in data.get("data", []):
@@ -507,10 +501,10 @@ def _parse_dce_daily(fpath: Path) -> List[Dict]:
 # DCE settlement JSON
 # -----------------------------------------------------------------------
 
-def _parse_dce_settlement(fpath: Path) -> List[Dict]:
+def _parse_dce_settlement(fpath: Path) -> list[dict]]:
     """Parse DCE settlement parameters JSON."""
     records = []
-    date = _extract_date_from_filename(fpath)
+    date = fpath.name.split(".")[0]
     with open(fpath, encoding="utf-8") as f:
         data = json.load(f)
     for item in data.get("data", []):
@@ -531,10 +525,10 @@ def _parse_dce_settlement(fpath: Path) -> List[Dict]:
 # GFEX daily market data JSON
 # -----------------------------------------------------------------------
 
-def _parse_gfex_daily(fpath: Path) -> List[Dict]:
+def _parse_gfex_daily(fpath: Path) -> list[dict]]:
     """Parse GFEX daily market data JSON."""
     records = []
-    date = _extract_date_from_filename(fpath)
+    date = fpath.name.split(".")[0]
     with open(fpath, encoding="utf-8") as f:
         data = json.load(f)
     for item in data.get("data", []):
@@ -570,10 +564,10 @@ def _parse_gfex_daily(fpath: Path) -> List[Dict]:
 # GFEX settlement JSON
 # -----------------------------------------------------------------------
 
-def _parse_gfex_settlement(fpath: Path) -> List[Dict]:
+def _parse_gfex_settlement(fpath: Path) -> list[dict]]:
     """Parse GFEX settlement parameters JSON."""
     records = []
-    date = _extract_date_from_filename(fpath)
+    date = fpath.name.split(".")[0]
     with open(fpath, encoding="utf-8") as f:
         data = json.load(f)
     for item in data.get("data", []):
@@ -597,10 +591,10 @@ def _parse_gfex_settlement(fpath: Path) -> List[Dict]:
 # File is GBK encoded
 # -----------------------------------------------------------------------
 
-def _parse_cffex_tradepara(fpath: Path) -> List[Dict]:
+def _parse_cffex_tradepara(fpath: Path) -> list[dict]]:
     """Parse CFFEX trading parameters CSV (GBK)."""
     records = []
-    date = _extract_date_from_filename(fpath)
+    date = fpath.name.split(".")[0]
     with open(fpath, encoding="gbk", errors="replace") as f:
         lines = f.read().strip().split("\n")
 
@@ -627,9 +621,9 @@ def _parse_cffex_tradepara(fpath: Path) -> List[Dict]:
 #       SPEC_LONGMARGINRATIO, SPEC_SHORTMARGINRATIO, TRADINGDAY
 # -----------------------------------------------------------------------
 
-def _parse_shfe_ine_tradepara(fpath: Path, suffix: str) -> List[Dict]:
+def _parse_shfe_ine_tradepara(fpath: Path, suffix: str) -> list[dict]]:
     records = []
-    date = _extract_date_from_filename(fpath)
+    date = fpath.name.split(".")[0]
     with open(fpath, encoding="utf-8") as f:
         data = json.load(f)
     for item in data.get("ContractDailyTradeArgument", []):
@@ -666,9 +660,9 @@ def _parse_shfe_ine_tradepara(fpath: Path, suffix: str) -> List[Dict]:
 #       specBuyRate, selfTotBuyPosiQuota
 # -----------------------------------------------------------------------
 
-def _parse_dce_tradepara(fpath: Path) -> List[Dict]:
+def _parse_dce_tradepara(fpath: Path) -> list[dict]]:
     records = []
-    date = _extract_date_from_filename(fpath)
+    date = fpath.name.split(".")[0]
     with open(fpath, encoding="utf-8") as f:
         data = json.load(f)
     items = data.get("data", [])
@@ -693,13 +687,13 @@ def _parse_dce_tradepara(fpath: Path) -> List[Dict]:
     return records
 
 
-def _parse_dce_tradingparam(fpath: Path) -> List[Dict]:
+def _parse_dce_tradingparam(fpath: Path) -> list[dict]]:
     """Parse DCE product-level tradingParam (varietyId + maxHand).
 
     Extracts maxHand → maxoq for all DCE products.
     """
     records = []
-    date = _extract_date_from_filename(fpath)
+    date = fpath.name.split(".")[0]
     with open(fpath, encoding="utf-8") as f:
         data = json.load(f)
     items = data.get("data", [])
@@ -724,9 +718,9 @@ def _parse_dce_tradingparam(fpath: Path) -> List[Dict]:
 #       specBuyRate, selfTotBuyPosiQuota
 # -----------------------------------------------------------------------
 
-def _parse_gfex_tradepara(fpath: Path) -> List[Dict]:
+def _parse_gfex_tradepara(fpath: Path) -> list[dict]]:
     records = []
-    date = _extract_date_from_filename(fpath)
+    date = fpath.name.split(".")[0]
     with open(fpath, encoding="utf-8") as f:
         data = json.load(f)
     items = data.get("data", [])
@@ -751,9 +745,9 @@ def _parse_gfex_tradepara(fpath: Path) -> List[Dict]:
 # Keys: indexCode, indexName, latestClose
 # -----------------------------------------------------------------------
 
-def _parse_csi_market(fpath: Path) -> List[Dict]:
+def _parse_csi_market(fpath: Path) -> list[dict]]:
     records = []
-    date = _extract_date_from_filename(fpath)
+    date = fpath.name.split(".")[0]
     with open(fpath, encoding="utf-8") as f:
         data = json.load(f)
     for item in data.get("data", []):
@@ -778,11 +772,11 @@ def _parse_csi_market(fpath: Path) -> List[Dict]:
 # 最小变动价位, used for price limit rounding
 # -----------------------------------------------------------------------
 
-def _parse_limit_pct(raw: str) -> Optional[float]:
-    """Parse CZCE limit pct: '\u00b113' -> 0.13, '\u00b120' -> 0.20."""
+def _parse_limit_pct(raw: str) -> float | None:
+    """Parse CZCE limit pct: '±13' -> 0.13, '±20' -> 0.20."""
     if raw is None:
         return None
-    raw = raw.strip().lstrip("\u00b1").strip()
+    raw = raw.strip().lstrip("±").strip()
     if not raw:
         return None
     try:
@@ -791,12 +785,12 @@ def _parse_limit_pct(raw: str) -> Optional[float]:
         return None
 
 
-def _float_to_int(val: Optional[float]) -> Optional[int]:
+def _float_to_int(val: float | None) -> int | None:
     """Convert float to int, or None."""
     return int(val) if val is not None else None
 
 
-def _float(val) -> Optional[float]:
+def _float(val) -> float | None:
     """Convert string/None to float or None."""
     if val is None:
         return None
@@ -811,7 +805,7 @@ def _float(val) -> Optional[float]:
         return None
 
 
-def _pct_val(val: str) -> Optional[float]:
+def _pct_val(val: str) -> float | None:
     """Parse percentage string like '12%' -> 0.12.
     Also handles '12%' (strips %% before float conversion), and plain '12'.
     """
@@ -837,17 +831,8 @@ PRODUCT_CONFIG_DIR = (
     Path(os.environ["DATA_DIR"]) / "raw" / "product_configs"
 )
 
-# {产品代码: "SHF"|"INE"}, 由 _load_product_tick_map() 填充
-_PRODUCT_EXCHANGE_MAP: Dict[str, str] = {}
 
-# 无独立产品页面的品种,直接从交易所规则硬编码
-# op_f(胶版印刷纸)在 SHFE 官网上无合约规格独立页面,无法通过 HTML 爬取
-HARDCODED_TICK = {
-    "op": 2.0,  # 胶版印刷纸
-}
-
-
-def _parse_tick_from_html(html: str) -> Optional[float]:
+def _parse_tick_from_html(html: str) -> float | None:
     """从 SHFE/INE 合约规格 HTML 页面提取最小变动价位。
 
     SHFE/INE 产品页面的合约规格表为 <table class='table_info'>,
@@ -869,53 +854,45 @@ def _parse_tick_from_html(html: str) -> Optional[float]:
     return None
 
 
-def _load_product_tick_map() -> Dict[str, float]:
-    """从 product_configs HTML 解析 tick + 交易所归属映射。
+def _load_exchange_map() -> dict[str, str]:
+    """从 product_configs 文件名构建交易所归属映射。
 
-    Returns: {pgid: tick_size}
-    同时设置模块级 _PRODUCT_EXCHANGE_MAP: {pgid: "SHF"|"INE"}
+    只扫描文件名(YYYYMMDD.EXCHANGE.product_code_f.html)，不打开文件。
+    Returns: {pgid: "SHF"|"INE"}
     """
-    global _PRODUCT_EXCHANGE_MAP
-    tick_map: Dict[str, float] = {}
-    exchange_map: Dict[str, str] = {}
-    if not PRODUCT_CONFIG_DIR.exists():
-        _PRODUCT_EXCHANGE_MAP = exchange_map
-        return tick_map
-
-    for fpath in sorted(PRODUCT_CONFIG_DIR.iterdir()):
+    exchange_map: dict[str, str] = {}
+    for fpath in PRODUCT_CONFIG_DIR.iterdir():
         if fpath.suffix != ".html":
             continue
-        # filename: YYYYMMDD.EXCHANGE.product_code_f.html
         parts = fpath.stem.split(".")
         if len(parts) < 3:
             continue
-        exchange = parts[1]  # SHFE or INE
+        exchange = parts[1]
         if exchange not in ("SHFE", "INE"):
             continue
-        code_key = parts[-1].lower()  # e.g. cu_f
+        code_key = parts[-1].lower()
         if not code_key.endswith("_f"):
             continue
-        pgid = code_key.rsplit("_", 1)[0]  # e.g. cu
-        # INE 优先：SHFE 页面可能列出 INE 品种, INE 覆盖 SHFE
+        pgid = code_key.rsplit("_", 1)[0]
+        # INE 优先: SHFE 页面可能列出 INE 品种
         if pgid not in exchange_map or exchange == "INE":
             exchange_map[pgid] = "SHF" if exchange == "SHFE" else "INE"
+    return exchange_map
 
-        try:
-            html = fpath.read_text(encoding="utf-8")
-            tick = _parse_tick_from_html(html)
-            if tick is not None:
-                tick_map[pgid] = tick
-        except Exception:
+
+def _load_tick_map(date_str: str) -> dict[str, float]:
+    tick_map: dict[str, float] = {}
+    prefix = f"{date_str}."
+    for fpath in PRODUCT_CONFIG_DIR.iterdir():
+        if not fpath.name.startswith(prefix) or fpath.suffix != ".html":
             continue
-
-    _PRODUCT_EXCHANGE_MAP = exchange_map
-    _set_product_exchange_map(exchange_map)
-
-    # 补充硬编码品种(无独立产品页面的品种)
-    for pgid, tick in HARDCODED_TICK.items():
-        if pgid not in tick_map:
+        code_key = fpath.stem.rsplit(".", 1)[-1].lower()
+        if not code_key.endswith("_f"):
+            continue
+        pgid = code_key.rsplit("_", 1)[0]
+        tick = _parse_tick_from_html(fpath.read_text(encoding="utf-8"))
+        if tick is not None:
             tick_map[pgid] = tick
-
     return tick_map
 
 
@@ -924,22 +901,13 @@ def _load_product_tick_map() -> Dict[str, float]:
 # -----------------------------------------------------------------------
 
 
-def _extract_date_from_filename(fpath: Path) -> str:
-    """Extract YYYYMMDD date from filename prefix."""
-    name = fpath.stem
-    date_match = re.match(r"(\d{8})", name)
-    if date_match:
-        return date_match.group(1)
-    return ""
-
-
 # -----------------------------------------------------------------------
 # Orchestration
 # -----------------------------------------------------------------------
 
 def parse_all():
     """Parse all raw files and return (records, stats_summary)."""
-    all_records: List[Dict] = []
+    all_records: list[dict]] = []
     all_stats = []
     for fpath in sorted(RAW_DIR.iterdir()):
         if not fpath.is_file() or fpath.suffix == ".jsonl":
@@ -960,9 +928,9 @@ def parse_all():
     return all_records, [s.stats_summary for s in all_stats]
 
 
-def merge_by_code_date(records: List[Dict]) -> List[Dict]:
+def merge_by_code_date(records: list[dict]], date_str: str) -> list[dict]]:
     """Merge records with same (code, date), filling None from either."""
-    merged: Dict[str, Dict] = {}
+    merged: dict[str, dict] = {}
     for rec in records:
         key = f"{rec.get('code')}|{rec.get('date')}"
         if key in merged:
@@ -1012,7 +980,7 @@ def merge_by_code_date(records: List[Dict]) -> List[Dict]:
         zero_price_to_none(rec)
 
     # Compute maxup/maxdown when both pre_settle and _limit_pct are available
-    tick_map: Dict[str, float] = {}
+    tick_map: dict[str, float] = {}
     for rec in merged.values():
         code = rec.get("code", "")
         pre_settle = rec.get("pre_settle") or rec.get("settle")
@@ -1023,7 +991,7 @@ def merge_by_code_date(records: List[Dict]) -> List[Dict]:
                 if code.endswith((".SHF", ".INE")):
                     # SHFE/INE: 向下取整 via Modifier
                     if not tick_map:
-                        tick_map = _load_product_tick_map()
+                        tick_map = _load_tick_map(date_str)
                     if tick_map:
                         product = "".join(
                             c.lower() for c in code.split(".")[0]
@@ -1056,10 +1024,6 @@ def merge_by_code_date(records: List[Dict]) -> List[Dict]:
             rec.pop(key, None)
 
     return list(merged.values())
-
-
-# ══════════════════════════════════════════════════════
-
 
 # ══════════════════════════════════════════════════════
 #  LLM 提取 maxoq / minoq
@@ -1151,33 +1115,31 @@ async def _download(
 
 def _pdf_to_text(pdf_path):
     import fitz, base64, requests as _req
-    # 抑制 MuPDF 结构树警告(不影响文本提取和渲染)
     old_warnings = fitz.TOOLS.mupdf_display_warnings(False)
     try:
-        doc = fitz.open(str(pdf_path))
-        parts = []
-        for p in range(min(len(doc), 10)):
-            try:
-                pix = doc[p].get_pixmap(dpi=150)
-                b64 = base64.b64encode(pix.tobytes("png")).decode()
-                r = _req.post(_ZHIPU_URL,
-                    headers={"Authorization": f"Bearer {_ZHIPU_KEY}",
-                             "Content-Type": "application/json"},
-                    json={
-                    "model": _ZHIPU_VISION_MODEL,
-                    "messages": [{"role": "user",
-                        "content": [{"type": "image_url",
-                         "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                        {"type": "text", "text": (
-    "提取此页中与下单量、开仓手数、交易限额相关的文字,逐字输出。"
-)}
-                    ]}], "max_tokens": 1024, "temperature": 0}, timeout=60)
-                parts.append(r.json()["choices"][0]["message"]["content"]
-                            if r.status_code == 200 else "")
-            except Exception:
-                pass
-        page_count = min(len(doc), 10)
-        doc.close()
+        with fitz.open(str(pdf_path)) as doc:
+            parts = []
+            for p in range(min(len(doc), 10)):
+                try:
+                    pix = doc[p].get_pixmap(dpi=150)
+                    b64 = base64.b64encode(pix.tobytes("png")).decode()
+                    r = _req.post(_ZHIPU_URL,
+                        headers={"Authorization": f"Bearer {_ZHIPU_KEY}",
+                                 "Content-Type": "application/json"},
+                        json={
+                        "model": _ZHIPU_VISION_MODEL,
+                        "messages": [{"role": "user",
+                            "content": [{"type": "image_url",
+                             "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                            {"type": "text", "text": (
+        "提取此页中与下单量、开仓手数、交易限额相关的文字,逐字输出。"
+    )}
+                        ]}], "max_tokens": 1024, "temperature": 0}, timeout=60)
+                    parts.append(r.json()["choices"][0]["message"]["content"]
+                                if r.status_code == 200 else "")
+                except Exception:
+                    pass
+            page_count = min(len(doc), 10)
     finally:
         fitz.TOOLS.mupdf_display_warnings(old_warnings)
     result = "\n".join(parts)
@@ -1191,18 +1153,17 @@ def _pdf_to_text(pdf_path):
 def _xlsx_to_text(path):
     import openpyxl
     try:
-        wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
-        out = []
-        for sn in wb.sheetnames[:2]:
-            ws = wb[sn]
-            rows = [",".join(str(v) for v in r if v is not None)
-                    for r in list(ws.iter_rows(values_only=True))[:30]
-                    if any(r)
-                ]
-            if rows:
-                out.append(f"[Sheet:{sn}]\n" + "\n".join(rows))
-        wb.close()
-        return "\n".join(out)
+        with openpyxl.load_workbook(str(path), read_only=True, data_only=True) as wb:
+            out = []
+            for sn in wb.sheetnames[:2]:
+                ws = wb[sn]
+                rows = [",".join(str(v) for v in r if v is not None)
+                        for r in list(ws.iter_rows(values_only=True))[:30]
+                        if any(r)
+                    ]
+                if rows:
+                    out.append(f"[Sheet:{sn}]\n" + "\n".join(rows))
+            return "\n".join(out)
     except Exception:
         return ""
 

@@ -5,13 +5,13 @@
 
 import re
 from pathlib import Path
-from typing import Callable, Dict, NamedTuple, Optional
+from typing import Callable, NamedTuple
 
 
 class TaskConfig(NamedTuple):
     """Immutable template for building a Task."""
     exchange: str
-    fetch_func: Callable[..., Dict]
+    fetch_func: Callable[..., dict]
     suffix: str
     description: str
     url_template: str
@@ -33,11 +33,11 @@ class Task:
         self.description = description
         self.url = url
         self.trade_date = trade_date
-        self.filepath: Optional[Path] = None
-        self.size: Optional[int] = None
-        self.previous_size: Optional[int] = None
-        self.change_percent: Optional[float] = None
-        self.fetch_func: Optional[Callable] = None
+        self.filepath: Path | None = None
+        self.size: int | None = None
+        self.previous_size: int | None = None
+        self.change_percent: float | None = None
+        self.fetch_func: Callable | None = None
 
     @classmethod
     def from_config(

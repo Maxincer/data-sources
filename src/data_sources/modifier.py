@@ -11,8 +11,6 @@ Modifier: 原始数据清洗规则汇总。
 import math
 import re
 from datetime import date
-from typing import Dict, List, Optional
-
 import logging
 
 _logger = logging.getLogger(__name__)
@@ -109,27 +107,15 @@ def czc_to_wind_code(code: str) -> str:
 # CFFEX 有效合约前缀
 CFFEX_VALID_PREFIXES = ("IF", "IC", "IH", "IM", "T", "TF", "TL", "TS")
 
-# SHFE 产品代码
-SHFE_PRODUCTS = {"CU", "AL", "ZN", "PB", "NI", "SN", "AU", "AG", "RB", "WR",
-                 "HC", "SS", "FU", "BU", "BR", "RU", "SP", "OP", "AD", "AO"}
-
-# INE 产品代码
-INE_PRODUCTS = {"SC", "BC", "LU", "NR", "EC"}
-
-# {产品代码: "SHF"|"INE"}, 由 parser._load_product_tick_map() 填充
-_PRODUCT_EXCHANGE_MAP: Dict[str, str] = {}
+# {产品代码: "SHF"|"INE"}, 由 parser._load_exchange_map() 填充
+_PRODUCT_EXCHANGE_MAP: dict[str, str] = {}
 
 
-def _set_product_exchange_map(mapping: Dict[str, str]) -> None:
-    """由 parser 在加载 product_configs 后调用，设置交易所归属映射。"""
-    _PRODUCT_EXCHANGE_MAP.update(mapping)
-
-
-def _ensure_exchange_map() -> Dict[str, str]:
-    """惰性加载 product_configs 交易所映射。"""
+def _ensure_exchange_map() -> dict[str, str]:
+    """惰性加载 product_configs 交易所映射(仅扫文件名,不解析 HTML)。"""
     if not _PRODUCT_EXCHANGE_MAP:
-        from data_sources.parser import _load_product_tick_map
-        _load_product_tick_map()
+        from data_sources.parser import _load_exchange_map
+        _PRODUCT_EXCHANGE_MAP.update(_load_exchange_map())
     return _PRODUCT_EXCHANGE_MAP
 
 
@@ -356,7 +342,7 @@ def fix_dce_limit_prices(records: list) -> list:
             dce_records.append(rec)
 
     from collections import defaultdict
-    by_code: Dict[str, List[Dict]] = defaultdict(list)
+    by_code: dict[str, list[dict]]] = defaultdict(list)
     for rec in dce_records:
         by_code[rec["code"]].append(rec)
 
@@ -443,7 +429,7 @@ def fix_gfe_limit_prices(records: list) -> list:
         if r.get("code", "").endswith(".GFE")
         and r.get("maxup") is not None
     ]
-    by_code: Dict[str, list] = defaultdict(list)
+    by_code: dict[str, list] = defaultdict(list)
     for rec in gfe_records:
         by_code[rec["code"]].append(rec)
 
@@ -501,7 +487,7 @@ def _fix_margin_inherit(
         if code.endswith(exchange_suffix) and rec.get("long_margin") is not None:
             target_records.append(rec)
 
-    by_code: Dict[str, List[Dict]] = defaultdict(list)
+    by_code: dict[str, list[dict]]] = defaultdict(list)
     for rec in target_records:
         by_code[rec["code"]].append(rec)
 

@@ -12,8 +12,6 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
-
 import fire
 import requests
 
@@ -48,7 +46,7 @@ _CFFEX_HEADERS = {
 }
 
 
-def fetch_cffex_jscs_links() -> List[dict]:
+def fetch_cffex_jscs_links() -> list[dict]:
     """
     Fetch CFFEX settlement params page and extract all <a> links.
     Returns list of {"url": str, "text": str}.
@@ -58,7 +56,7 @@ def fetch_cffex_jscs_links() -> List[dict]:
     html = resp.text
 
     base = "http://www.cffex.com.cn"
-    links: List[dict] = []
+    links: list[dict] = []
     pattern = re.compile(
         r'<a\s[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
         re.IGNORECASE | re.DOTALL,
@@ -188,7 +186,7 @@ class Fetcher:
     # Generic GET fetch (used by simple GET + verify + save methods)
     # -----------------------------------------------------------------
 
-    def _do_fetch_get(self, task: Task, label: str = "") -> Dict:
+    def _do_fetch_get(self, task: Task, label: str = "") -> dict:
         """Generic GET + verify + save for simple API calls."""
         try:
             resp = requests.get(
@@ -212,12 +210,12 @@ class Fetcher:
     # Exchange-specific fetch methods
     # -----------------------------------------------------------------
 
-    def _fetch_shfe_settlement(self, task: Task) -> Dict:
+    def _fetch_shfe_settlement(self, task: Task) -> dict:
         return self._do_fetch_get(task, "SHFE settlement")
 
-    def _fetch_ine_settlement(self, task: Task) -> Dict:
+    def _fetch_ine_settlement(self, task: Task) -> dict:
         return self._do_fetch_get(task, "INE settlement")
-    def _fetch_gfex_settlement(self, task: Task) -> Dict:
+    def _fetch_gfex_settlement(self, task: Task) -> dict:
         try:
             # GFEX 结算参数表要求 trade_date 以数组格式传入才能正确区分日期
             payload = {"trade_date": [task.trade_date]}
@@ -262,7 +260,7 @@ class Fetcher:
             self.logger.error("GFEX fetch failed: %s", e, exc_info=True)
             return {"success": False, "error": str(e)}
 
-    def _fetch_gfex_market(self, task: Task) -> Dict:
+    def _fetch_gfex_market(self, task: Task) -> dict:
         try:
             payload = {"trade_date": task.trade_date, "trade_type": "0"}
             resp = requests.post(
@@ -318,7 +316,7 @@ class Fetcher:
             )
             return {"success": False, "error": str(e)}
 
-    def _fetch_dce_settlement(self, task: Task) -> Dict:
+    def _fetch_dce_settlement(self, task: Task) -> dict:
         token = self._get_dce_token()
         if not token:
             return {"success": False, "error": "Token acquisition failed"}
@@ -370,7 +368,7 @@ class Fetcher:
             self.logger.error("DCE fetch failed: %s", e, exc_info=True)
             return {"success": False, "error": str(e)}
 
-    def _fetch_dce_market(self, task: Task) -> Dict:
+    def _fetch_dce_market(self, task: Task) -> dict:
         token = self._get_dce_token()
         if not token:
             return {"success": False, "error": "Token acquisition failed"}
@@ -424,7 +422,7 @@ class Fetcher:
             )
             return {"success": False, "error": str(e)}
 
-    def _fetch_czce_settlement(self, task: Task) -> Dict:
+    def _fetch_czce_settlement(self, task: Task) -> dict:
         try:
             resp = requests.get(
                 task.url, headers=self.fake_headers, timeout=30
@@ -443,7 +441,7 @@ class Fetcher:
             self.logger.error("CZCE fetch failed: %s", e, exc_info=True)
             return {"success": False, "error": str(e)}
 
-    def _fetch_cffex_market(self, task: Task) -> Dict:
+    def _fetch_cffex_market(self, task: Task) -> dict:
         try:
             resp = requests.get(
                 task.url, headers=self.fake_headers, timeout=30
@@ -476,7 +474,7 @@ class Fetcher:
     # New data source: CFFEX settlement parameters
     # -----------------------------------------------------------------
 
-    def _fetch_cffex_settlement(self, task: Task) -> Dict:
+    def _fetch_cffex_settlement(self, task: Task) -> dict:
         try:
             resp = requests.get(
                 task.url, headers=self.fake_headers, timeout=30
@@ -510,7 +508,7 @@ class Fetcher:
     # New data source: SHFE daily market data (kx*.dat)
     # -----------------------------------------------------------------
 
-    def _fetch_shfe_market(self, task: Task) -> Dict:
+    def _fetch_shfe_market(self, task: Task) -> dict:
         try:
             url = task.url + str(int(time.time() * 1000))
             resp = requests.get(
@@ -539,7 +537,7 @@ class Fetcher:
     # New data source: INE daily market data (kx*.dat)
     # -----------------------------------------------------------------
 
-    def _fetch_ine_market(self, task: Task) -> Dict:
+    def _fetch_ine_market(self, task: Task) -> dict:
         try:
             url = task.url + str(int(time.time() * 1000))
             resp = requests.get(
@@ -568,7 +566,7 @@ class Fetcher:
     # New data source: CZCE daily market data
     # -----------------------------------------------------------------
 
-    def _fetch_czce_market(self, task: Task) -> Dict:
+    def _fetch_czce_market(self, task: Task) -> dict:
         try:
             resp = requests.get(
                 task.url, headers=self.fake_headers, timeout=30
@@ -597,7 +595,7 @@ class Fetcher:
     # DCE token helper
     # -----------------------------------------------------------------
 
-    def _get_dce_token(self) -> Optional[str]:
+    def _get_dce_token(self) -> str | None:
         """Retrieve a valid Bearer token for the DCE API, with caching."""
         now = time.time()
         cache = self._dce_token_cache
@@ -644,7 +642,7 @@ class Fetcher:
     # CFFEX trading parameters (simple GET CSV)
     # -----------------------------------------------------------------
 
-    def _fetch_cffex_tradepara(self, task: Task) -> Dict:
+    def _fetch_cffex_tradepara(self, task: Task) -> dict:
         try:
             resp = requests.get(
                 task.url, headers=self.fake_headers, timeout=30
@@ -674,7 +672,7 @@ class Fetcher:
     # SHFE trading parameters (simple GET .dat)
     # -----------------------------------------------------------------
 
-    def _fetch_shfe_tradepara(self, task: Task) -> Dict:
+    def _fetch_shfe_tradepara(self, task: Task) -> dict:
         try:
             url = task.url + "?params=" + str(int(time.time() * 1000))
             resp = requests.get(
@@ -704,7 +702,7 @@ class Fetcher:
     # INE trading parameters (simple GET .dat, same pattern as SHFE)
     # -----------------------------------------------------------------
 
-    def _fetch_ine_tradepara(self, task: Task) -> Dict:
+    def _fetch_ine_tradepara(self, task: Task) -> dict:
         try:
             resp = requests.get(
                 task.url, headers=self.fake_headers, timeout=30
@@ -733,7 +731,7 @@ class Fetcher:
     # DCE trading parameters (POST with Bearer token)
     # -----------------------------------------------------------------
 
-    def _fetch_dce_tradepara(self, task: Task) -> Dict:
+    def _fetch_dce_tradepara(self, task: Task) -> dict:
         token = self._get_dce_token()
         if not token:
             return {"success": False, "error": "Token acquisition failed"}
@@ -785,7 +783,7 @@ class Fetcher:
             )
             return {"success": False, "error": str(e)}
 
-    def _fetch_dce_tradingparam(self, task: Task) -> Dict:
+    def _fetch_dce_tradingparam(self, task: Task) -> dict:
         """Fetch DCE product-level tradingParam (maxHand)."""
         token = self._get_dce_token()
         if not token:
@@ -823,7 +821,7 @@ class Fetcher:
     # GFEX trading parameters (simple POST JSON)
     # -----------------------------------------------------------------
 
-    def _fetch_gfex_tradepara(self, task: Task) -> Dict:
+    def _fetch_gfex_tradepara(self, task: Task) -> dict:
         try:
             payload = {"trade_type": "0", "trade_date": task.trade_date}
             headers = {
@@ -868,7 +866,7 @@ class Fetcher:
     # CZCE trading parameters (simple GET TXT - FutureTradeParam.txt)
     # -----------------------------------------------------------------
 
-    def _fetch_czce_tradepara(self, task: Task) -> Dict:
+    def _fetch_czce_tradepara(self, task: Task) -> dict:
         try:
             resp = requests.get(
                 task.url, headers=self.fake_headers, timeout=30
@@ -898,7 +896,7 @@ class Fetcher:
     # CSI index market data (POST JSON)
     # -----------------------------------------------------------------
 
-    def _fetch_csi_market(self, task: Task) -> Dict:
+    def _fetch_csi_market(self, task: Task) -> dict:
         try:
             payload = {
                 "sorter": {"sortField": "null", "sortOrder": None},
@@ -953,7 +951,7 @@ class Fetcher:
     # Tushare index close data
     # -----------------------------------------------------------------
 
-    def _fetch_ts_index_close(self, task: Task) -> Dict:
+    def _fetch_ts_index_close(self, task: Task) -> dict:
         """
         Fetch spot index closing data from Tushare.
         Indices: 000016.SH (IH/sup50), 000300.SH (IF/HS300),
@@ -1025,14 +1023,14 @@ class Fetcher:
 
     def _retry_failed_tasks(
         self,
-        failed_tasks: List[Task],
-    ) -> tuple[List[Task], List[Task]]:
+        failed_tasks: list[Task],
+    ) -> tuple[list[Task], list[Task]]:
         """
         Retry each failed task using the stored fetch_func.
         Returns (still_failed, recovered).
         """
-        still_failed: List[Task] = []
-        recovered: List[Task] = []
+        still_failed: list[Task] = []
+        recovered: list[Task] = []
         if not failed_tasks:
             return still_failed, recovered
         self.logger.info(
@@ -1063,7 +1061,7 @@ class Fetcher:
         Path(os.environ.get("DATA_DIR", "./data")) / "raw" / "product_configs"
     )
 
-    def _fetch_exchange_product_config(self, task: Task) -> Dict:
+    def _fetch_exchange_product_config(self, task: Task) -> dict:
         """Download SHFE/INE product specification HTMLs via Playwright.
 
         使用单个浏览器会话完成产品发现 + 所有页面下载，
@@ -1180,11 +1178,11 @@ class Fetcher:
     )
         return {"success": True}
 
-    def _fetch_shfe_product_config(self, task: Task) -> Dict:
+    def _fetch_shfe_product_config(self, task: Task) -> dict:
         """Download SHFE product specification HTMLs."""
         return self._fetch_exchange_product_config(task)
 
-    def _fetch_ine_product_config(self, task: Task) -> Dict:
+    def _fetch_ine_product_config(self, task: Task) -> dict:
         """Download INE product specification HTMLs."""
         return self._fetch_exchange_product_config(task)
 
@@ -1192,7 +1190,7 @@ class Fetcher:
     # Main entry point
     # -----------------------------------------------------------------
 
-    def run(self, trade_date: Optional[str] = None) -> None:
+    def run(self, trade_date: str | None = None) -> None:
         if trade_date is None:
             trade_date = datetime.now().strftime("%Y%m%d")
         else:
@@ -1202,8 +1200,8 @@ class Fetcher:
             "=== Starting futures data download for %s ===", trade_date
         )
 
-        successful_tasks: List[Task] = []
-        failed_tasks: List[Task] = []
+        successful_tasks: list[Task] = []
+        failed_tasks: list[Task] = []
 
         # 找出已有 GFE 交易参数表文件中的最近日期
         gfe_latest = ""
