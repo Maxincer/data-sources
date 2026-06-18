@@ -235,7 +235,7 @@ def clean_orphans(meta: dict[str, dict]):
     removed = 0
     for fpath in ANNOUNCEMENTS_DIR.rglob("*.html"):
         if fpath.is_file():
-            rel = str(fpath.relative_to(Path.cwd()))
+            rel = str(fpath.relative_to(DATA_DIR))
             if rel not in meta_paths:
                 fpath.unlink()
                 removed += 1
@@ -459,7 +459,7 @@ def _download_cffex_articles(ctx, articles: list[dict], meta: dict):
                     "exchange": "CFFEX",
                     "category": category,
                     "pub_date": a.get("pub_date", ""),
-                    "source_file": str(filepath.relative_to(Path.cwd())),
+                    "source_file": str(filepath.relative_to(DATA_DIR)),
                     "status": "downloaded",
                     "downloaded_at": _now_str(),
                 }
@@ -835,7 +835,7 @@ def _dce_download_articles(
                     "exchange": "DCE",
                     "category": dce_category,
                     "pub_date": a.get("pub_date") or _dce_extract_date_id(a["url"], "")[0],
-                    "source_file": str(filepath.relative_to(Path.cwd())),
+                    "source_file": str(filepath.relative_to(DATA_DIR)),
                     "status": "downloaded",
                     "note": "Tavily 提取的文本内容 (非原始 HTML, 因 WAF 阻挡)",
                     "downloaded_at": _now_str(),
@@ -892,7 +892,7 @@ def _dce_api_save_articles(
             "exchange": "DCE",
             "category": dce_category,
             "pub_date": a.get("pub_date") or a.get("showDate", ""),
-            "source_file": str(filepath.relative_to(Path.cwd())),
+            "source_file": str(filepath.relative_to(DATA_DIR)),
             "status": "downloaded",
             "note": "DCE CMS API 返回的原始 HTML",
             "downloaded_at": _now_str(),
@@ -1213,7 +1213,7 @@ def _gfex_download_articles(articles: list[dict], meta: dict) -> int:
                 "exchange": "GFEX",
                 "category": category,
                 "pub_date": pub_date,
-                "source_file": str(filepath.relative_to(Path.cwd())),
+                "source_file": str(filepath.relative_to(DATA_DIR)),
                 "status": "downloaded",
                 "downloaded_at": _now_str(),
             }
@@ -1422,7 +1422,7 @@ def collect_ine():
                             "exchange": "INE",
                             "category": cat,
                             "pub_date": pd,
-                            "source_file": str(fp.relative_to(Path.cwd())),
+                            "source_file": str(fp.relative_to(DATA_DIR)),
                             "status": "downloaded",
                             "downloaded_at": _now_str(),
                         })
@@ -1467,7 +1467,7 @@ def collect_ine():
                             "exchange": "INE",
                             "category": "daily",
                             "pub_date": pd,
-                            "source_file": str(fp.relative_to(Path.cwd())),
+                            "source_file": str(fp.relative_to(DATA_DIR)),
                             "status": "downloaded",
                             "downloaded_at": _now_str(),
                         })
@@ -1654,7 +1654,7 @@ def collect_shfe():
                             "exchange": "SHFE",
                             "category": cat,
                             "pub_date": pd,
-                            "source_file": str(fp.relative_to(Path.cwd())),
+                            "source_file": str(fp.relative_to(DATA_DIR)),
                             "status": "downloaded",
                             "downloaded_at": _now_str(),
                         })
@@ -1699,7 +1699,7 @@ def collect_shfe():
                             "exchange": "SHFE",
                             "category": "daily",
                             "pub_date": pd,
-                            "source_file": str(fp.relative_to(Path.cwd())),
+                            "source_file": str(fp.relative_to(DATA_DIR)),
                             "status": "downloaded",
                             "downloaded_at": _now_str(),
                         })
