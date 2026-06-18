@@ -151,6 +151,19 @@ def _check_download(html: str, exchange: str, aid: str, title: str, url: str = "
     return None
 
 
+def _goto_with_retry(page, url: str, timeout: int = 30000, max_retries: int = 3):
+    """带重试的 page.goto，处理网络波动和 WAF 超时。"""
+    for attempt in range(max_retries):
+        try:
+            page.goto(url, wait_until="networkidle", timeout=timeout)
+            return
+        except Exception:
+            if attempt < max_retries - 1:
+                time.sleep(2 * (attempt + 1))
+            else:
+                raise
+
+
 def _log_download_failures():
     """采集结束时打印下载级验证异常汇总."""
     if not _download_failures:
@@ -1311,7 +1324,7 @@ def _ine_extract_rules(page) -> list[dict]:
     while True:
         url = (INE_RULES_URL if page_idx is None
                else f"{INE_RULES_URL}index_{page_idx}.html")
-        page.goto(url, wait_until="networkidle", timeout=30000)
+        _goto_with_retry(page, url)
         time.sleep(1)
         items = _ine_extract_list(page)
         if not items:
@@ -1343,7 +1356,7 @@ def _ine_extract_daily(page) -> list[dict]:
     while not stopped:
         url = (INE_NOTICES_URL if page_idx is None
                else f"{INE_NOTICES_URL}index_{page_idx}.html")
-        page.goto(url, wait_until="networkidle", timeout=30000)
+        _goto_with_retry(page, url)
         time.sleep(1)
         items = _ine_extract_list(page)
         if not items:
@@ -1416,7 +1429,7 @@ def collect_ine():
                 fp = INE_BASE / cat / fname
                 fp.parent.mkdir(parents=True, exist_ok=True)
                 try:
-                    page.goto(url, wait_until="networkidle", timeout=30000)
+                    _goto_with_retry(page, url)
                     time.sleep(1)
                     html = page.content()
                     if len(html) > 500:
@@ -1461,7 +1474,7 @@ def collect_ine():
                 fp = INE_BASE / "daily" / fname
                 fp.parent.mkdir(parents=True, exist_ok=True)
                 try:
-                    page.goto(url, wait_until="networkidle", timeout=30000)
+                    _goto_with_retry(page, url)
                     time.sleep(1)
                     html = page.content()
                     if len(html) > 500:
@@ -1556,7 +1569,7 @@ def _shfe_extract_rules(page) -> list[dict]:
         while True:
             url = (base_url if page_idx is None
                    else f"{base_url}index_{page_idx}.html")
-            page.goto(url, wait_until="networkidle", timeout=30000)
+            _goto_with_retry(page, url)
             time.sleep(1)
             items = _shfe_extract_list(page)
             if not items:
@@ -1588,7 +1601,7 @@ def _shfe_extract_daily(page) -> list[dict]:
     while not stopped:
         url = (SHFE_NOTICES_URL if page_idx is None
                else f"{SHFE_NOTICES_URL}index_{page_idx}.html")
-        page.goto(url, wait_until="networkidle", timeout=30000)
+        _goto_with_retry(page, url)
         time.sleep(1)
         items = _shfe_extract_list(page)
         if not items:
@@ -1660,7 +1673,7 @@ def collect_shfe():
                 fp = SHFE_BASE / cat / fname
                 fp.parent.mkdir(parents=True, exist_ok=True)
                 try:
-                    page.goto(url, wait_until="networkidle", timeout=30000)
+                    _goto_with_retry(page, url)
                     time.sleep(1)
                     html = page.content()
                     if len(html) > 500:
@@ -1705,7 +1718,7 @@ def collect_shfe():
                 fp = SHFE_BASE / "daily" / fname
                 fp.parent.mkdir(parents=True, exist_ok=True)
                 try:
-                    page.goto(url, wait_until="networkidle", timeout=30000)
+                    _goto_with_retry(page, url)
                     time.sleep(1)
                     html = page.content()
                     if len(html) > 500:
