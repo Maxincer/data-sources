@@ -1383,7 +1383,34 @@ async def parse_announcement_fields(
     # 附件下载
     atext = ""
     if links and attachment_dir:
+        # 加载 metadata 用于附件缓存查找
+        _att_cache = None
+        try:
+            with open(META_FILE, encoding="utf-8") as f:
+                _att_cache = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            _att_cache = {}
+
         for link in links:
+            # 查缓存：metadata 中已有该附件 URL 且文件存在
+            att_record = _att_cache.get(link["url"])
+            if att_record:
+                cached_path = Path(att_record["source_file"])
+                if cached_path.exists():
+                    local = cached_path
+                    _llm_logger.info(
+                        "附件命中缓存: %s (%s bytes)",
+                        local.resolve(), local.stat().st_size,
+                    )
+                    if local:
+                        try:
+                            t = (_pdf_to_text(local) if link["ext"] == ".pdf"
+                                 else _xlsx_to_text(local))
+                            atext += f"\n[附件:{local.name}]\n{t}\n"
+                        except Exception:
+                            _llm_logger.debug("附件解析失败: %s", local.name)
+                    continue
+
             local = await _download(link["url"], attachment_dir,
                              exchange, publish_date, link["url_id"],
                              session=session)
