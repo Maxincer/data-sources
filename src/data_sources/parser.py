@@ -1137,32 +1137,40 @@ async def _download(
 
 
 def _pdf_to_text(pdf_path):
-    import fitz, base64, requests as _req
+    import fitz, base64, requests as _req, os
     old_warnings = fitz.TOOLS.mupdf_display_warnings(False)
     try:
-        with fitz.open(str(pdf_path)) as doc:
-            parts = []
-            for p in range(min(len(doc), 10)):
-                try:
-                    pix = doc[p].get_pixmap(dpi=150)
-                    b64 = base64.b64encode(pix.tobytes("png")).decode()
-                    r = _req.post(_ZHIPU_URL,
-                        headers={"Authorization": f"Bearer {_ZHIPU_KEY}",
-                                 "Content-Type": "application/json"},
-                        json={
-                        "model": _ZHIPU_VISION_MODEL,
-                        "messages": [{"role": "user",
-                            "content": [{"type": "image_url",
-                             "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                            {"type": "text", "text": (
-        "提取此页中与下单量、开仓手数、交易限额相关的文字,逐字输出。"
-    )}
-                        ]}], "max_tokens": 1024, "temperature": 0}, timeout=60)
-                    parts.append(r.json()["choices"][0]["message"]["content"]
-                                if r.status_code == 200 else "")
-                except Exception:
-                    _llm_logger.debug("PDF 单页提取失败: %s p%d", pdf_path.name, p + 1)
-            page_count = min(len(doc), 10)
+        # 屏蔽 MuPDF C 库直接输出到 stderr 的错误信息
+        with open(os.devnull, 'w') as devnull:
+            old_stderr = os.dup(2)
+            os.dup2(devnull.fileno(), 2)
+            try:
+                with fitz.open(str(pdf_path)) as doc:
+                    parts = []
+                    for p in range(min(len(doc), 10)):
+                        try:
+                            pix = doc[p].get_pixmap(dpi=150)
+                            b64 = base64.b64encode(pix.tobytes("png")).decode()
+                            r = _req.post(_ZHIPU_URL,
+                                headers={"Authorization": f"Bearer {_ZHIPU_KEY}",
+                                         "Content-Type": "application/json"},
+                                json={
+                                "model": _ZHIPU_VISION_MODEL,
+                                "messages": [{"role": "user",
+                                    "content": [{"type": "image_url",
+                                     "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                                    {"type": "text", "text": (
+                "提取此页中与下单量、开仓手数、交易限额相关的文字,逐字输出。"
+            )}
+                                ]}], "max_tokens": 1024, "temperature": 0}, timeout=60)
+                            parts.append(r.json()["choices"][0]["message"]["content"]
+                                        if r.status_code == 200 else "")
+                        except Exception:
+                            _llm_logger.debug("PDF 单页提取失败: %s p%d", pdf_path.name, p + 1)
+                    page_count = min(len(doc), 10)
+            finally:
+                os.dup2(old_stderr, 2)
+                os.close(old_stderr)
     finally:
         fitz.TOOLS.mupdf_display_warnings(old_warnings)
     result = "\n".join(parts)

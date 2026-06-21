@@ -44,13 +44,28 @@ def _parse_eff_date_sort(eff: str) -> int:
     return int(d) if d.isdigit() else 0
 
 
-def _extract_variety(contract_code: str) -> str:
+def security_id_to_product_code(security_id: str) -> str:
     """合约代码 → 品种代码.
-    'CU2507' → 'CU', 'PP2509-F' → 'PP', 'M2601' → 'M'.
+    'CU2507' → 'CU', 'PP2509-F' → 'PP-F', 'M2601' → 'M', 'SC2606TAS' → 'SC'.
+
+    - 数字后如有 F 后缀, 保留为产品代码的一部分
+    - 数字后如有 TAS 后缀, 剥离
+    - 其他模式视为不合法
     """
-    # 去掉后缀 (如 -F 月均价, -P 等)
-    base = re.sub(r'-[A-Z]\d*$', '', contract_code, flags=re.IGNORECASE)
-    return "".join(c for c in base if c.isalpha()).upper()
+    m = re.search(r'^([A-Za-z]+)\d+([A-Za-z]+)?$', security_id)
+    if not m:
+        raise ValueError(
+            f"cannot extract product_code from security_id: {security_id}"
+        )
+    base = m.group(1).upper()
+    suffix = m.group(2) or ''
+    if suffix.upper() == 'F':
+        return base + '-F'
+    if suffix.upper() == 'TAS':
+        return base
+    if not suffix:
+        return base
+    raise ValueError(f'Unknown suffix: {security_id}')
 
 
 class OrderLimitBook:
@@ -143,7 +158,12 @@ class OrderLimitBook:
         """按优先级 (daily > product > general) 取最新 minoq/maxoq.
         返回: {"minoq": int|None, "maxoq": int|None}
         """
-        variety_id = _extract_variety(contract_code)
+        # 无数字 → 品种级代码（如 A, V, L-F, PP-F），直接作为 variety_id
+        # 有数字 → 合约级代码（如 A2609, L2607F），需转换为品种代码
+        if not any(c.isdigit() for c in contract_code):
+            variety_id = contract_code
+        else:
+            variety_id = security_id_to_product_code(contract_code)
         result = {"minoq": None, "maxoq": None}
         for lv in self.LEVELS:
             lv_result = self._best_for_level(lv, exchange, variety_id, contract_code)
@@ -171,8 +191,10 @@ def inject_order_limits(records: list) -> list:
     """对缺少 minoq/maxoq 的记录, 从 fields_from_announcements.csv 注入."""
     book = _get_book()
     for rec in records:
-        code = rec.get("code", "")
-        suffix = "." + code.split(".")[-1] if "." in code else ""
+        code = rec["code"]
+        if "." not in code:
+            raise ValueError(f"缺少交易所后缀: {code!r}")
+        suffix = "." + code.split(".")[-1]
         exchange = _SUFFIX_TO_EXCHANGE.get(suffix)
         if exchange is None:
             continue
@@ -294,6 +316,11 @@ def write_trade_date(date_str: str, table: str,
     records = merge_by_code_date(records, date_str)
     records = inject_order_limits(records)  # 外部 CSV → minoq/maxoq 合并
     records = _apply_modifiers(records)
+
+    # 过滤品种级/指数级记录（无合约月份），只留合约级数据写入数据库
+    records = [
+        r for r in records if any(c.isdigit() for c in r.get("code", ""))
+    ]
 
     norm_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
     target_records = [r for r in records if r.get("date") == norm_date]

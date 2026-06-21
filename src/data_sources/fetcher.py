@@ -1294,7 +1294,7 @@ class Fetcher:
         successful_tasks.extend(recovered)
 
         if not still_failed:
-            self.logger.alert(
+            self.logger.info(
                 "All raw data for %s downloaded successfully", trade_date
             )
         else:

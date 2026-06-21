@@ -78,7 +78,9 @@ class Reporter:
             )
             total_current += cur_size
         lines.append(f"总大小: {total_current:,} 字节")
-        self.logger.alert("\n".join(lines))
+        # 用户要求屏蔽 📊 文件尺寸检查报告
+        # self.logger.alert("\n".join(lines))
+        self.logger.info("文件尺寸检查完成: %d 个文件, %s 字节", len(lines)-3, total_current)
 
     def generate_daily(
         self, date_str: str, *,

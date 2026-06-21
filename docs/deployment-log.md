@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-06-18 文档同步：b34f683 版本更新
+
+### 发现：文档与代码版本不一致
+
+`deployment-guide.latest.md` 基于 `f4a1939` 编写，但当前 HEAD 是 `b34f683`（在 `f4a1939` 之后又有代码去硬编码 + 配置外置清理提交）。
+
+**差异清单**：
+1. 版本号：文档 `f4a1939` → HEAD `b34f683`
+2. 敏感信息：分散硬编码 → 统一 env var fallback（`${VAR:-default}`）
+3. 新增 Zhipu API key（公告 LLM 解析用）
+4. 时间门禁：注释掉 → 启用（< 16:30 跳过）
+5. Step 1/3：注释掉 → 取消注释正式运行
+6. 硬编码 `TRADE_DATE="20260616"` → 删除
+7. `pyproject.toml` 新增 `tushare>=1.4.0`
+8. `PRODUCT_CONFIG_DIR` 路径独立于 structured/
+9. `DB_PASSWORD`/`DATA_DIR` 从可选 → 必填
+
+**操作**：已将 `deployment-guide.latest.md` 更新到 HEAD 版本 `20260617-b34f683`。
+
+---
+
 ## 2026-06-17 初始讨论 + 部署准备
 
 ### 目标

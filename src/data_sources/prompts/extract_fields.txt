@@ -4,14 +4,17 @@
 - maxoq: 期货合约限价指令每次最大开仓下单手数
 - minoq: 期货合约限价指令每次最小开仓下单手数
 - needs_review: 是否需要人工处理，是：1，否：0
-- product_code 是品种代码（仅字母部分），security_id 是合约代码（含月份）
+- product_code 是品种代码，security_id 是合约代码（含月份）
+  - 月均价合约的品种代码带 "-F" 后缀（如 L-F, V-F, PP-F），不要省略
+  - 月均价合约的合约代码带 "F" 后缀（如 L2607F, PP2607F），不要省略
+  - 结算价交易合约的品种代码无后缀（如SC合约），其合约代码有后缀（如SC2608TAS）
 - field 必须是 "minoq" 或 "maxoq" 之一
 
 输出 schema（每个公告一条）：
 {
   "items": [
     {
-      "product_code": "品种代码（仅字母，如PS、LC、IF；通用规则填ALL）",
+      "product_code": "品种代码（如PS、LC、IF；月均价合约加-F后缀如L-F、V-F；通用规则填ALL）",
       "security_id": "合约代码（如PS2705、LC2706；通用规则填ALL）",
       "field": "minoq 或 maxoq",
       "value": 手数（整数）,

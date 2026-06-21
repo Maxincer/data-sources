@@ -2,7 +2,10 @@
 #  Production:                 data-sources-pipeline [TRADE_DATE]
 #  Development:                DEV_MODE=1 bash scripts/data-sources-pipeline [TRADE_DATE]
 
+set -euo pipefail
+
 TRADE_DATE="${1:-$(date +%Y%m%d)}"
+TRADE_DATE="20260618"
 
 WRITER_TABLE="t_futures_info_exchange"
 # WRITER_TABLE="t_futures_info"  # phase 2
@@ -76,11 +79,11 @@ else
 fi
 
 # ---- 时间门禁 ----
-CURRENT_HM=$(date +%H%M)
-if [ "$CURRENT_HM" -lt 1630 ]; then
-    echo "[$(date '+%F %T')] 当前 ${CURRENT_HM} < 1630，跳过 pipeline"
-    exit 0
-fi
+# CURRENT_HM=$(date +%H%M)
+# if [ "$CURRENT_HM" -lt 1630 ]; then
+#     echo "[$(date '+%F %T')] 当前 ${CURRENT_HM} < 1630，跳过 pipeline"
+#     exit 0
+# fi
 
 # ---- 密码与收件人（env var fallback，部署人员可通过 rutask env 覆写）----
 export DAILY_START_DATE="${DAILY_START_DATE:-20251201}"
@@ -100,24 +103,23 @@ export TAVILY_API_KEY="${TAVILY_API_KEY:-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
 export TUSHARE_TOKEN="${TUSHARE_TOKEN:-01f10e786b76dd6212829418aa979f3e578253f57eecbf0e12c9a44b}"
 export WIND_RPC_HOST="${WIND_RPC_HOST:-192.168.2.9}"
 export WIND_RPC_PORT="${WIND_RPC_PORT:-3801}"
-SENDER="${SENDER:-robot@wendao.fund}"
-#RECIPIENTS="fisher@wendao.fund,chendingzhong@wendao.fund,mxz@wendao.fund"
-RECIPIENTS="${RECIPIENTS:-mxz@wendao.fund}"
+export SENDER="${SENDER:-robot@wendao.fund}"
+export RECIPIENTS="${RECIPIENTS:-mxz@wendao.fund}"
 
 # ---- 执行管线 ----
 echo "[$(date '+%F %T')] ===== pipeline started for ${TRADE_DATE} ====="
 
 echo "[$(date '+%F %T')] Step 1/5: Collecting announcements..."
-${RUN_COLLECT} 2>&1 || echo "[WARN] Collect completed with errors"
+#${RUN_COLLECT} 2>&1 || exit 1
 
 echo "[$(date '+%F %T')] Step 2/5: Analyzing announcements..."
-${RUN_ANALYSE} 2>&1 || echo "[WARN] Analyse completed with errors"
+#${RUN_ANALYSE} 2>&1 || exit 1
 
 echo "[$(date '+%F %T')] Step 3/5: Fetching..."
-${RUN_FETCHER} 2>&1 || echo "[WARN] Fetcher completed with errors"
+#${RUN_FETCHER} 2>&1 || exit 1
 
 echo "[$(date '+%F %T')] Step 4/5: Writing..."
-${RUN_WRITER} 2>&1 || echo "[WARN] Writer completed with errors"
+${RUN_WRITER} 2>&1 || exit 1
 
 echo "[$(date '+%F %T')] Step 5/5: Reporting + email..."
 ${RUN_REPORTER} --sender "${SENDER}" --recipients "${RECIPIENTS}" ${REPORTER_OPTS} 2>&1

@@ -78,7 +78,7 @@ logger = get_logger(
 EXCHANGE_CATEGORIES = {"general", "product", "daily"}
 
 def _exchange_dir(exchange: str) -> Path:
-    return DATA_DIR / "exchanges" / exchange
+    return DATA_DIR / "raw" / "announcements" / "exchanges" / exchange
 
 # ── CFFEX ────────────────────────────────────────────
 CFFEX_BASE = _exchange_dir("CFFEX")
@@ -133,27 +133,15 @@ def _check_download(html: str, exchange: str, aid: str, title: str, url: str = "
     返回 None = 通过, 返回 str = 失败原因.
     """
     if not html or len(html) < 200:
-        _download_failures.append(dict(
-            exchange=exchange, aid=aid, title=title[:60], url=url,
-            reason="响应体过短",
-        ))
         return "响应体过短"
 
     # 反爬 WAF 检测: EO_Bot_Ssid JS challenge
     if "EO_Bot_Ssid" in html or "_0x649a" in html[:500]:
-        _download_failures.append(dict(
-            exchange=exchange, aid=aid, title=title[:60], url=url,
-            reason="WAF/bot challenge",
-        ))
         return "WAF/bot challenge"
 
     # 仅检查 <title> 中的 404, 不扫描 body 关键词
     title_tag = re.search(r"<title>([^<]+)</title>", html)
     if title_tag and "404" in title_tag.group(1):
-        _download_failures.append(dict(
-            exchange=exchange, aid=aid, title=title[:60], url=url,
-            reason="404",
-        ))
         return "404"
 
     return None
@@ -172,8 +160,45 @@ def _goto_with_retry(page, url: str, timeout: int = 30000, max_retries: int = 3)
                 raise
 
 
+def _record_download_failure(
+    meta: dict[str, dict],
+    aid: str, article: dict,
+    category: str, filepath: Path,
+    reason: str = "",
+):
+    """记录公告下载失败到 metadata + 累计到 _download_failures 列表."""
+    rec = {
+        "id": aid,
+        "url": article.get("url", ""),
+        "title": article.get("title", ""),
+        "exchange": article.get("exchange", ""),
+        "category": category,
+        "pub_date": article.get("pub_date", ""),
+        "source_file": str(filepath),
+        "status": "found but failed to download",
+        "note": reason,
+        "downloaded_at": "",
+    }
+    upsert_record(aid, rec)
+    meta[aid] = rec
+    _download_failures.append(dict(
+        exchange=article.get("exchange", ""),
+        aid=aid,
+        title=article.get("title", "")[:60],
+        url=article.get("url", ""),
+        category=category,
+        pub_date=article.get("pub_date", ""),
+        filepath=str(filepath),
+        reason=reason,
+    ))
+    logger.warning(
+        "  ✗ [%7s] %s | %s | 原因: %s",
+        category, aid, article.get("title", "?")[:40], reason,
+    )
+
+
 def _log_download_failures():
-    """采集结束时打印下载级验证异常汇总."""
+    """打印全部已累计的失败记录. 注意：不清空 _download_failures."""
     if not _download_failures:
         logger.info("[下载验证] 全部通过")
         return
@@ -189,7 +214,6 @@ def _log_download_failures():
                 "    [%s] %s | %s | %s",
                 item["reason"], item["aid"], item["title"], item.get("url", ""),
             )
-    _download_failures.clear()
 
 
 # ══════════════════════════════════════════════════════
@@ -242,6 +266,19 @@ def upsert_record(key: str, record: dict):
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
+def _resolve_source_file(sf: str) -> Path:
+    """解析 metadata 中的 source_file 为绝对路径.
+
+    source_file 存储时为 str(filepath), 可能是:
+    - 绝对路径: 直接使用
+    - 相对路径: 相对于 CWD (project root)
+    """
+    p = Path(sf)
+    if p.is_absolute():
+        return p
+    return Path.cwd() / p
+
+
 def clean_orphans(meta: dict[str, dict]):
     """删除 DATA_DIR 中存在但 metadata 中无记录的文件."""
     if not ANNOUNCEMENTS_DIR.exists():
@@ -269,6 +306,29 @@ def clean_orphans(meta: dict[str, dict]):
     for dirpath in sorted(ANNOUNCEMENTS_DIR.rglob("*"), reverse=True):
         if dirpath.is_dir() and not any(dirpath.iterdir()):
             dirpath.rmdir()
+
+    # ── 反向: 标注 metadata 中标为 downloaded 但文件不存在的脏记录 ──
+    for aid, rec in meta.items():
+        if rec.get("status") == "downloaded":
+            sf = rec.get("source_file", "")
+            if sf:
+                fp = _resolve_source_file(sf)
+                if not fp.exists():
+                    rec["status"] = "found but failed to download"
+                    rec["note"] = "文件不存在: %s" % fp
+                    logger.warning(
+                        "  [clean] metadata 脏记录: %s | 文件不存在: %s | 已标为失败",
+                        aid, fp,
+                    )
+
+    # 写回 metadata 文件
+    METADATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(METADATA_FILE, "w", encoding="utf-8") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 
 
 # ══════════════════════════════════════════════════════
@@ -468,33 +528,44 @@ def _download_cffex_articles(ctx, articles: list[dict], meta: dict):
             html = page.content()
             page.close()
 
-            if len(html) > 500:
-                if _check_download(html, "CFFEX", aid, a.get("title", ""), a.get("url", "")):
-                    continue
-                _locked_write_html(filepath, html)
-
-                rec = {
-                    "id": aid,
-                    "url": a["url"],
-                    "title": a.get("title", ""),
-                    "exchange": "CFFEX",
-                    "category": category,
-                    "pub_date": a.get("pub_date", ""),
-                    "source_file": str(filepath),
-                    "status": "downloaded",
-                    "downloaded_at": _now_str(),
-                }
-                upsert_record(aid, rec)
-                meta[aid] = rec
-                downloaded += 1
-                logger.info(
-                    "  ✓ [%7s] %s | %s",
-                    category, aid[:8], a['title'][:50],
+            if len(html) <= 500:
+                _record_download_failure(
+                    meta, aid, a, category, filepath,
+                    reason="内容过短: %d chars" % len(html),
                 )
-        except Exception:
-            logger.exception(
-                "  ✗ [%7s] %s | %s",
-                category, aid[:8], a.get('title', '?')[:40],
+                continue
+
+            fail_reason = _check_download(html, "CFFEX", aid, a.get("title", ""), a.get("url", ""))
+            if fail_reason:
+                _record_download_failure(
+                    meta, aid, a, category, filepath, reason=fail_reason,
+                )
+                continue
+
+            _locked_write_html(filepath, html)
+
+            rec = {
+                "id": aid,
+                "url": a["url"],
+                "title": a.get("title", ""),
+                "exchange": "CFFEX",
+                "category": category,
+                "pub_date": a.get("pub_date", ""),
+                "source_file": str(filepath),
+                "status": "downloaded",
+                "downloaded_at": _now_str(),
+            }
+            upsert_record(aid, rec)
+            meta[aid] = rec
+            downloaded += 1
+            logger.info(
+                "  ✓ [%7s] %s | %s",
+                category, aid, a['title'][:50],
+            )
+        except Exception as e:
+            _record_download_failure(
+                meta, aid, a, category, filepath,
+                reason="异常: %s" % e,
             )
 
     logger.info("[CFFEX] 下载完成: %s/%s 成功", downloaded, len(new_articles))
@@ -821,6 +892,16 @@ def _dce_download_articles(
                 "[DCE/%s] Tavily 批量下载 HTTP %s",
                 dce_category, resp.status_code,
             )
+                for a in batch:
+                    in_aid = _dce_article_id(a["url"], a.get("pub_date", ""))
+                    in_filename = _dce_build_filename(a)
+                    in_fp = DCE_BASE / dce_category / in_filename
+                    in_fp.parent.mkdir(parents=True, exist_ok=True)
+                    if in_aid not in meta:
+                        _record_download_failure(
+                            meta, in_aid, a, dce_category, in_fp,
+                            reason="Tavily HTTP %s" % resp.status_code,
+                        )
                 continue
 
             data = resp.json()
@@ -833,18 +914,22 @@ def _dce_download_articles(
             for a in batch:
                 aid = _dce_article_id(a["url"], a.get("pub_date", ""))
                 raw_content = url_to_content.get(a["url"], "")
-                if len(raw_content) < 500:
-                    logger.warning(
-                    "[DCE/%s] 内容过短: %s (%s chars)",
-                    dce_category, aid, len(raw_content),
-                )
-                    continue
-
                 filename = _dce_build_filename(a)
                 filepath = DCE_BASE / dce_category / filename
                 filepath.parent.mkdir(parents=True, exist_ok=True)
 
-                if _check_download(raw_content, "DCE", aid, a.get("title", ""), a.get("url", "")):
+                if len(raw_content) < 500:
+                    _record_download_failure(
+                        meta, aid, a, dce_category, filepath,
+                        reason="内容过短: %d chars" % len(raw_content),
+                    )
+                    continue
+
+                fail_reason = _check_download(raw_content, "DCE", aid, a.get("title", ""), a.get("url", ""))
+                if fail_reason:
+                    _record_download_failure(
+                        meta, aid, a, dce_category, filepath, reason=fail_reason,
+                    )
                     continue
 
                 _locked_write_html(filepath, raw_content)
@@ -869,8 +954,18 @@ def _dce_download_articles(
                 dce_category, aid, a["title"][:50],
             )
 
-        except Exception:
+        except Exception as e:
             logger.exception("[DCE/%s] 批量下载异常", dce_category)
+            for a in batch:
+                in_aid = _dce_article_id(a["url"], a.get("pub_date", ""))
+                in_filename = _dce_build_filename(a)
+                in_fp = DCE_BASE / dce_category / in_filename
+                in_fp.parent.mkdir(parents=True, exist_ok=True)
+                if in_aid not in meta:
+                    _record_download_failure(
+                        meta, in_aid, a, dce_category, in_fp,
+                        reason="批量下载异常: %s" % e,
+                    )
 
     logger.info(
     "[DCE/%s] 下载完成: %s/%s 成功",
@@ -893,16 +988,23 @@ def _dce_api_save_articles(
             continue
 
         content_html = a.get("content", "")
-        if not content_html or len(content_html) < 100:
-            logger.warning("[DCE/API] 内容过短: %s", aid)
-            continue
-
-        if _check_download(content_html, "DCE", aid, a.get("title", ""), a.get("url", "")):
-            continue
-
         filename = _dce_build_filename(a)
         filepath = DCE_BASE / dce_category / filename
         filepath.parent.mkdir(parents=True, exist_ok=True)
+
+        if not content_html or len(content_html) < 100:
+            _record_download_failure(
+                meta, aid, a, dce_category, filepath,
+                reason="内容过短: %d chars" % (len(content_html) if content_html else 0),
+            )
+            continue
+
+        fail_reason = _check_download(content_html, "DCE", aid, a.get("title", ""), a.get("url", ""))
+        if fail_reason:
+            _record_download_failure(
+                meta, aid, a, dce_category, filepath, reason=fail_reason,
+            )
+            continue
 
         _locked_write_html(filepath, content_html)
 
@@ -1223,7 +1325,11 @@ def _gfex_download_articles(articles: list[dict], meta: dict) -> int:
                 fname = f"GFEX_{pub_date}_{uuid_part}.html"
                 filepath = GFEX_BASE / category / fname
 
-            if _check_download(html, "GFEX", aid, a.get("title", ""), a.get("url", "")):
+            fail_reason = _check_download(html, "GFEX", aid, a.get("title", ""), a.get("url", ""))
+            if fail_reason:
+                _record_download_failure(
+                    meta, aid, a, category, filepath, reason=fail_reason,
+                )
                 continue
 
             _locked_write_html(filepath, html)
@@ -1243,12 +1349,12 @@ def _gfex_download_articles(articles: list[dict], meta: dict) -> int:
             downloaded += 1
             logger.info(
                 "  ✓ [%7s] %s | %s",
-                category, aid[:8], a["title"][:50],
+                category, aid, a["title"][:50],
             )
         else:
-            logger.warning(
-                "  ✗ [%7s] %s | %s (响应过短)",
-                category, aid[:8], a["title"][:40],
+            _record_download_failure(
+                meta, aid, a, category, filepath,
+                reason="内容过短或空: %d chars" % (len(html) if html else 0),
             )
 
     return downloaded
@@ -1440,27 +1546,40 @@ def collect_ine():
                     _goto_with_retry(page, url)
                     time.sleep(1)
                     html = page.content()
-                    if len(html) > 500:
-                        if _check_download(html, "INE", aid, a["title"], a.get("url", "")):
-                            continue
-                        _locked_write_html(fp, html)
-                        upsert_record(aid, {
-                            "id": aid,
-                            "url": url,
-                            "title": a["title"],
-                            "exchange": "INE",
-                            "category": cat,
-                            "pub_date": pd,
-                            "source_file": str(fp),
-                            "status": "downloaded",
-                            "downloaded_at": _now_str(),
-                        })
-                        meta[aid] = True
-                        logger.info("  ✓ [%7s] %s | %s", cat, aid,
-                                     a["title"][:50])
-                except Exception:
-                    logger.exception("  ✗ [%s] %s | %s",
-                                     cat, aid, a["title"][:40])
+                    if len(html) <= 500:
+                        _record_download_failure(
+                            meta, aid, a, cat, fp,
+                            reason="内容过短: %d chars" % len(html),
+                        )
+                        continue
+
+                    fail_reason = _check_download(html, "INE", aid, a["title"], a.get("url", ""))
+                    if fail_reason:
+                        _record_download_failure(
+                            meta, aid, a, cat, fp, reason=fail_reason,
+                        )
+                        continue
+
+                    _locked_write_html(fp, html)
+                    upsert_record(aid, {
+                        "id": aid,
+                        "url": url,
+                        "title": a["title"],
+                        "exchange": "INE",
+                        "category": cat,
+                        "pub_date": pd,
+                        "source_file": str(fp),
+                        "status": "downloaded",
+                        "downloaded_at": _now_str(),
+                    })
+                    meta[aid] = True
+                    logger.info("  ✓ [%7s] %s | %s", cat, aid,
+                                 a["title"][:50])
+                except Exception as e:
+                    _record_download_failure(
+                        meta, aid, a, cat, fp,
+                        reason="异常: %s" % e,
+                    )
             logger.info("[INE] 规则类: 下载 %s/%s 条",
                          sum(1 for a in new
                              if _ine_article_id(a["url"]) in meta),
@@ -1485,27 +1604,40 @@ def collect_ine():
                     _goto_with_retry(page, url)
                     time.sleep(1)
                     html = page.content()
-                    if len(html) > 500:
-                        if _check_download(html, "INE", aid, a["title"], a.get("url", "")):
-                            continue
-                        _locked_write_html(fp, html)
-                        upsert_record(aid, {
-                            "id": aid,
-                            "url": url,
-                            "title": a["title"],
-                            "exchange": "INE",
-                            "category": "daily",
-                            "pub_date": pd,
-                            "source_file": str(fp),
-                            "status": "downloaded",
-                            "downloaded_at": _now_str(),
-                        })
-                        meta[aid] = True
-                        logger.info("  ✓ [  daily] %s | %s", aid,
-                                     a["title"][:50])
-                except Exception:
-                    logger.exception("  ✗ [daily] %s | %s",
-                                     aid, a["title"][:40])
+                    if len(html) <= 500:
+                        _record_download_failure(
+                            meta, aid, a, "daily", fp,
+                            reason="内容过短: %d chars" % len(html),
+                        )
+                        continue
+
+                    fail_reason = _check_download(html, "INE", aid, a["title"], a.get("url", ""))
+                    if fail_reason:
+                        _record_download_failure(
+                            meta, aid, a, "daily", fp, reason=fail_reason,
+                        )
+                        continue
+
+                    _locked_write_html(fp, html)
+                    upsert_record(aid, {
+                        "id": aid,
+                        "url": url,
+                        "title": a["title"],
+                        "exchange": "INE",
+                        "category": "daily",
+                        "pub_date": pd,
+                        "source_file": str(fp),
+                        "status": "downloaded",
+                        "downloaded_at": _now_str(),
+                    })
+                    meta[aid] = True
+                    logger.info("  ✓ [  daily] %s | %s", aid,
+                                 a["title"][:50])
+                except Exception as e:
+                    _record_download_failure(
+                        meta, aid, a, "daily", fp,
+                        reason="异常: %s" % e,
+                    )
             logger.info("[INE] 公告: 下载 %s/%s 条",
                          sum(1 for a in new_d
                              if _ine_article_id(a["url"]) in meta),
@@ -1684,27 +1816,40 @@ def collect_shfe():
                     _goto_with_retry(page, url)
                     time.sleep(1)
                     html = page.content()
-                    if len(html) > 500:
-                        if _check_download(html, "SHFE", aid, a["title"], a.get("url", "")):
-                            continue
-                        _locked_write_html(fp, html)
-                        upsert_record(aid, {
-                            "id": aid,
-                            "url": url,
-                            "title": a["title"],
-                            "exchange": "SHFE",
-                            "category": cat,
-                            "pub_date": pd,
-                            "source_file": str(fp),
-                            "status": "downloaded",
-                            "downloaded_at": _now_str(),
-                        })
-                        meta[aid] = True
-                        logger.info("  ✓ [%7s] %s | %s", cat, aid,
-                                     a["title"][:50])
-                except Exception:
-                    logger.exception("  ✗ [%s] %s | %s",
-                                     cat, aid, a["title"][:40])
+                    if len(html) <= 500:
+                        _record_download_failure(
+                            meta, aid, a, cat, fp,
+                            reason="内容过短: %d chars" % len(html),
+                        )
+                        continue
+
+                    fail_reason = _check_download(html, "SHFE", aid, a["title"], a.get("url", ""))
+                    if fail_reason:
+                        _record_download_failure(
+                            meta, aid, a, cat, fp, reason=fail_reason,
+                        )
+                        continue
+
+                    _locked_write_html(fp, html)
+                    upsert_record(aid, {
+                        "id": aid,
+                        "url": url,
+                        "title": a["title"],
+                        "exchange": "SHFE",
+                        "category": cat,
+                        "pub_date": pd,
+                        "source_file": str(fp),
+                        "status": "downloaded",
+                        "downloaded_at": _now_str(),
+                    })
+                    meta[aid] = True
+                    logger.info("  ✓ [%7s] %s | %s", cat, aid,
+                                 a["title"][:50])
+                except Exception as e:
+                    _record_download_failure(
+                        meta, aid, a, cat, fp,
+                        reason="异常: %s" % e,
+                    )
             logger.info("[SHFE] 规则类: 下载 %s/%s 条",
                          sum(1 for a in new
                              if _shfe_article_id(a["url"]) in meta),
@@ -1729,27 +1874,40 @@ def collect_shfe():
                     _goto_with_retry(page, url)
                     time.sleep(1)
                     html = page.content()
-                    if len(html) > 500:
-                        if _check_download(html, "SHFE", aid, a["title"], a.get("url", "")):
-                            continue
-                        _locked_write_html(fp, html)
-                        upsert_record(aid, {
-                            "id": aid,
-                            "url": url,
-                            "title": a["title"],
-                            "exchange": "SHFE",
-                            "category": "daily",
-                            "pub_date": pd,
-                            "source_file": str(fp),
-                            "status": "downloaded",
-                            "downloaded_at": _now_str(),
-                        })
-                        meta[aid] = True
-                        logger.info("  ✓ [  daily] %s | %s", aid,
-                                     a["title"][:50])
-                except Exception:
-                    logger.exception("  ✗ [daily] %s | %s",
-                                     aid, a["title"][:40])
+                    if len(html) <= 500:
+                        _record_download_failure(
+                            meta, aid, a, "daily", fp,
+                            reason="内容过短: %d chars" % len(html),
+                        )
+                        continue
+
+                    fail_reason = _check_download(html, "SHFE", aid, a["title"], a.get("url", ""))
+                    if fail_reason:
+                        _record_download_failure(
+                            meta, aid, a, "daily", fp, reason=fail_reason,
+                        )
+                        continue
+
+                    _locked_write_html(fp, html)
+                    upsert_record(aid, {
+                        "id": aid,
+                        "url": url,
+                        "title": a["title"],
+                        "exchange": "SHFE",
+                        "category": "daily",
+                        "pub_date": pd,
+                        "source_file": str(fp),
+                        "status": "downloaded",
+                        "downloaded_at": _now_str(),
+                    })
+                    meta[aid] = True
+                    logger.info("  ✓ [  daily] %s | %s", aid,
+                                 a["title"][:50])
+                except Exception as e:
+                    _record_download_failure(
+                        meta, aid, a, "daily", fp,
+                        reason="异常: %s" % e,
+                    )
             logger.info("[SHFE] 公告: 下载 %s/%s 条",
                          sum(1 for a in new_d
                              if _shfe_article_id(a["url"]) in meta),
@@ -1770,8 +1928,74 @@ def _compute_id(url: str) -> str:
     return hashlib.md5(url.encode()).hexdigest()[:12]
 
 
+def _retry_failures(meta: dict[str, dict]):
+    """重试一轮中所有失败的公告下载."""
+    if not _download_failures:
+        return 0
+
+    retried = 0
+    recovered = 0
+    logger.info("%s", '-'*60)
+    logger.info("[重试] 开始重试 %s 条失败记录 ...", len(_download_failures))
+
+    for f_entry in _download_failures:
+        aid = f_entry["aid"]
+        url = f_entry["url"]
+        filepath = Path(f_entry["filepath"])
+
+        rec = meta.get(aid)
+        if not rec or rec.get("status") != "found but failed to download":
+            continue
+
+        retried += 1
+        try:
+            import requests as _req
+            resp = _req.get(url, timeout=15, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            })
+            html = resp.text
+
+            if len(html) >= 200 and "EO_Bot_Ssid" not in html:
+                filepath.parent.mkdir(parents=True, exist_ok=True)
+                _locked_write_html(filepath, html)
+                rec["status"] = "downloaded"
+                rec["note"] = ""
+                rec["downloaded_at"] = _now_str()
+                upsert_record(aid, rec)
+                meta[aid] = rec
+                recovered += 1
+                logger.info(
+                    "  \u2713 [重试成功] %s | %s",
+                    aid, f_entry.get("title", "")[:40],
+                )
+            else:
+                logger.warning(
+                    "  \u2717 [重试失败] %s | %s",
+                    aid, f_entry.get("title", "")[:40],
+                )
+        except Exception as e:
+            logger.warning(
+                "  \u2717 [重试失败] %s | %s | %s",
+                aid, f_entry.get("title", "")[:40], e,
+            )
+
+    logger.info(
+        "[重试] 完成: %s/%s 恢复, 剩余 %s 条失败",
+        recovered, retried, len(_download_failures) - recovered,
+    )
+    logger.info("%s", '-'*60)
+    return recovered
+
+
 def collect_once():
-    """单次采集循环. CFFEX, DCE, GFEX, INE, SHFE."""
+    """单次采集循环. CFFEX, DCE, GFEX, INE, SHFE.
+
+    流程：
+    1. 全部交易所采集一轮（失败累计到 _download_failures + metadata）
+    2. 打印所有失败记录
+    3. 逐一重试失败记录
+    4. 再次打印剩余失败
+    """
     logger.info("%s", '='*60)
     logger.info("采集开始 — %s", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
 
@@ -1780,22 +2004,21 @@ def collect_once():
     clean_orphans(meta)
     logger.info("已知公告: %s 条", len(meta))
 
-    # ── CFFEX: Playwright 直采 ──
+    # ── 第一轮: 全部交易所采集 ──
     collect_cffex()
-
-    # ── DCE: CMS API ──
     collect_dce()
-
-    # ── GFEX: requests 直采 ──
     collect_gfex()
-
-    # ── INE: Playwright 直采 ──
     collect_ine()
-
-    # ── SHFE: Playwright 直采 ──
     collect_shfe()
 
+    # ── 打印第一轮失败（不清空）──
     _log_download_failures()
+
+    # ── 重试轮 ──
+    if _download_failures:
+        _retry_failures(meta)
+        _log_download_failures()
+
     logger.info("%s", '='*60)
 
 
