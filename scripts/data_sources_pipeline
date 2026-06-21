@@ -5,7 +5,6 @@
 set -euo pipefail
 
 TRADE_DATE="${1:-$(date +%Y%m%d)}"
-TRADE_DATE="20260618"
 
 WRITER_TABLE="t_futures_info_exchange"
 # WRITER_TABLE="t_futures_info"  # phase 2
@@ -79,11 +78,11 @@ else
 fi
 
 # ---- 时间门禁 ----
-# CURRENT_HM=$(date +%H%M)
-# if [ "$CURRENT_HM" -lt 1630 ]; then
-#     echo "[$(date '+%F %T')] 当前 ${CURRENT_HM} < 1630，跳过 pipeline"
-#     exit 0
-# fi
+CURRENT_HM=$(date +%H%M)
+if [ "$CURRENT_HM" -lt 1630 ]; then
+    echo "[$(date '+%F %T')] 当前 ${CURRENT_HM} < 1630，跳过 pipeline"
+    exit 0
+fi
 
 # ---- 密码与收件人（env var fallback，部署人员可通过 rutask env 覆写）----
 export DAILY_START_DATE="${DAILY_START_DATE:-20251201}"
