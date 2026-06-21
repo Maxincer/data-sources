@@ -1079,7 +1079,7 @@ def get_attachment_failures() -> list[dict]:
 def upsert_attachment_metadata(aid: str, url: str, exchange: str, title: str,
                                category: str, pub_date: str, filepath: Path):
     """附件下载成功后，写入 announcements_metadata.json."""
-    att_id = url
+    att_id = f"{aid}_att_{filepath.stem}"
     now = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%dT%H:%M:%S+08:00")
     rec = {
         "id": att_id,
@@ -1392,8 +1392,13 @@ async def parse_announcement_fields(
             _att_cache = {}
 
         for link in links:
-            # 查缓存：metadata 中已有该附件 URL 且文件存在
-            att_record = _att_cache.get(link["url"])
+            # 查缓存：遍历 metadata 按 url 字段匹配
+            att_record = None
+            if _att_cache:
+                for rec in _att_cache.values():
+                    if rec.get("url") == link["url"]:
+                        att_record = rec
+                        break
             if att_record:
                 cached_path = Path(att_record["source_file"])
                 if cached_path.exists():
