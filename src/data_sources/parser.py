@@ -15,6 +15,7 @@ import csv
 import json
 import os
 import re
+import threading
 from pathlib import Path
 import aiohttp
 from bs4 import BeautifulSoup
@@ -1113,6 +1114,50 @@ _BROWSER_HEADERS = {
 }
 
 
+_PW_EXCHANGES = {"GFEX", "SHFE", "INE", "CFFEX"}
+_PW_BROWSER: tuple | None = None
+_PW_LOCK = threading.Lock()
+
+
+def _get_pw_browser():
+    """获取或创建全局 Playwright browser 实例. 线程安全的懒加载."""
+    global _PW_BROWSER
+    if _PW_BROWSER is not None:
+        return _PW_BROWSER
+    with _PW_LOCK:
+        if _PW_BROWSER is not None:
+            return _PW_BROWSER
+        from playwright.sync_api import sync_playwright
+        p = sync_playwright().start()
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+        )
+        _PW_BROWSER = (p, browser)
+    return _PW_BROWSER
+
+
+def _pw_download(url: str, local_path: Path):
+    """用 Playwright 下载文件, 绕过 JS challenge WAF."""
+    _, browser = _get_pw_browser()
+    ctx = browser.new_context(locale="zh-CN", user_agent=_BROWSER_HEADERS["User-Agent"])
+    page = ctx.new_page()
+    try:
+        resp = page.goto(url, wait_until="networkidle", timeout=60000)
+        if resp is None or not resp.ok:
+            raise RuntimeError(f"Playwright HTTP {resp.status if resp else 'N/A'}")
+        body = resp.body()
+        if len(body) < 5000:
+            raise RuntimeError(f"WAF/bot challenge (playwright, {len(body)} bytes)")
+        tmp = local_path.with_suffix(local_path.suffix + ".tmp")
+        tmp.write_bytes(body)
+        tmp.rename(local_path)
+        return local_path
+    finally:
+        ctx.close()
+        page.close()
+
+
 async def _download(
     url, save_dir, exchange="", date_str="",
     url_id="", session=None,
@@ -1129,6 +1174,14 @@ async def _download(
     if local.exists():
         return local
     save_dir.mkdir(parents=True, exist_ok=True)
+
+    # 高反爬交易所用 Playwright 绕过 JS challenge
+    if exchange in _PW_EXCHANGES:
+        try:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, _pw_download, url, local)
+        except Exception:
+            pass
 
     last_err = None
     import requests as _http_requests
