@@ -1079,10 +1079,11 @@ def get_attachment_failures() -> list[dict]:
 def upsert_attachment_metadata(aid: str, url: str, exchange: str, title: str,
                                category: str, pub_date: str, filepath: Path):
     """附件下载成功后，写入 announcements_metadata.json."""
-    att_id = f"{aid}_att_{filepath.stem}"
+    att_id = url
     now = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%dT%H:%M:%S+08:00")
     rec = {
         "id": att_id,
+        "announcement_id": aid,
         "url": url,
         "title": title,
         "exchange": exchange,
