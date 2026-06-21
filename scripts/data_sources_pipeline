@@ -15,7 +15,7 @@ REPORTER_OPTS=""
 [ -n "${SKIP_TABLE_COMPARE:-}" ] && REPORTER_OPTS="$REPORTER_OPTS --skip-table-compare"
 
 # ---- 环境自适应 ----
-if [ -n "${DEV}" ]; then
+if [ -n "${DEV:-}" ]; then
     # 开发模式
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     CWD="$(dirname "$SCRIPT_DIR")"
