@@ -1095,6 +1095,24 @@ def _extract_links(html, page_url):
     return results
 
 
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/134.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+}
+
+
 async def _download(
     url, save_dir, exchange="", date_str="",
     url_id="", session=None,
@@ -1113,12 +1131,13 @@ async def _download(
     save_dir.mkdir(parents=True, exist_ok=True)
 
     last_err = None
+    import requests as _http_requests
     for attempt in range(3):
         try:
             async with _host_semaphore(url):
                 async with session.get(
                     url, timeout=aiohttp.ClientTimeout(total=300),
-                    headers={"User-Agent": "Mozilla/5.0"},
+                    headers=_BROWSER_HEADERS,
                 ) as r:
                     r.raise_for_status()
                     body = await r.read()
@@ -1133,6 +1152,20 @@ async def _download(
             last_err = e
             if attempt < 2:
                 await asyncio.sleep(2 * (attempt + 1))
+    # aiohttp 全部失败时，用 requests 兜底（某些 WAF 对 aiohttp 限制更严）
+    try:
+        loop = asyncio.get_running_loop()
+        body = await loop.run_in_executor(None, lambda: _http_requests.get(
+            url, headers=_BROWSER_HEADERS, timeout=30,
+        ).content)
+        if len(body) < 5000:
+            raise RuntimeError(f"WAF/bot challenge (requests fallback, {len(body)} bytes)")
+        tmp = local.with_suffix(local.suffix + ".tmp")
+        tmp.write_bytes(body)
+        tmp.rename(local)
+        return local
+    except Exception:
+        pass
     raise last_err
 
 
