@@ -147,9 +147,6 @@ def main():
                 )
                 review_flag = 1 if needs_review else 0
 
-                if links:
-                    entry["attachments_downloaded"] = True
-
                 async with lock:
                     if not items:
                         skipped[0] += 1
@@ -320,10 +317,6 @@ def main():
                                 aid=aid,
                             )
                             review_flag = 1 if needs_review else 0
-
-                            if links:
-                                entry["attachments_downloaded"] = True
-
                             async with lock:
                                 if items:
                                     for item in items:
@@ -399,10 +392,6 @@ def main():
         "写入完成: +%s 条, 总计 %s 条 → %s",
         len(new_rows), len(all_rows), OUTPUT_FILE,
     )
-
-    # 写回 metadata（记录附件下载状态等变更）
-    with open(META_FILE, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
 
 
 if __name__ == "__main__":

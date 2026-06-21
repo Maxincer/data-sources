@@ -12,10 +12,12 @@ Stat tracking: total_records, missing count per field, missing deviation.
 
 import asyncio
 import csv
+import fcntl
 import json
 import os
 import re
 import threading
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import aiohttp
 from bs4 import BeautifulSoup
@@ -33,6 +35,8 @@ from data_sources.modifier import (
 )
 
 RAW_DIR = Path(os.environ["DATA_DIR"]) / "raw" / "structured"
+DATA_DIR = Path(os.environ["DATA_DIR"])
+META_FILE = DATA_DIR / "raw" / "announcements" / "announcements_metadata.json"
 
 # Exchange code suffixes for DB
 SUFFIX_MAP = {
@@ -1072,6 +1076,42 @@ def get_attachment_failures() -> list[dict]:
     return list(_att_failures)
 
 
+def upsert_attachment_metadata(aid: str, url: str, exchange: str, title: str,
+                               category: str, pub_date: str, filepath: Path):
+    """附件下载成功后，写入 announcements_metadata.json."""
+    att_id = f"{aid}_att_{filepath.stem}"
+    now = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    rec = {
+        "id": att_id,
+        "url": url,
+        "title": title,
+        "exchange": exchange,
+        "category": category,
+        "pub_date": pub_date,
+        "source_file": str(filepath),
+        "status": "downloaded",
+        "downloaded_at": now,
+    }
+    META_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(META_FILE, "r+", encoding="utf-8") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                f.seek(0)
+                raw = f.read()
+                meta = json.loads(raw) if raw.strip() else {}
+                meta[att_id] = rec
+                f.seek(0)
+                f.truncate()
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+    except FileNotFoundError:
+        # 文件不存在时首次创建
+        with open(META_FILE, "w", encoding="utf-8") as f:
+            json.dump({att_id: rec}, f, ensure_ascii=False, indent=2)
+
+
 def _load_prompt(name: str) -> str:
     return (
         Path(__file__).parent / "prompts" / name
@@ -1347,6 +1387,10 @@ async def parse_announcement_fields(
                              exchange, publish_date, link["url_id"],
                              session=session)
             if local:
+                upsert_attachment_metadata(
+                    aid, link["url"], exchange, title,
+                    category, publish_date, local,
+                )
                 try:
                     t = (_pdf_to_text(local) if link["ext"] == ".pdf"
                          else _xlsx_to_text(local))
