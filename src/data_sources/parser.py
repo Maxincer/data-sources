@@ -1152,7 +1152,7 @@ def _pw_download(url: str, local_path: Path):
         tmp = local_path.with_suffix(local_path.suffix + ".tmp")
         tmp.write_bytes(body)
         tmp.rename(local_path)
-        _llm_logger.info("附件下载成功: %s (%s bytes)", local_path, local_path.stat().st_size)
+        _llm_logger.info("附件下载成功: %s (%s bytes)", local_path.resolve(), local_path.stat().st_size)
         return local_path
     finally:
         ctx.close()
@@ -1173,7 +1173,7 @@ async def _download(
             fname = f"att_{abs(hash(url)) % 10**8}{ext}"
     local = save_dir / fname
     if local.exists():
-        _llm_logger.info("附件下载成功: %s (%s bytes)", local, local.stat().st_size)
+        _llm_logger.info("附件下载成功: %s (%s bytes)", local.resolve(), local.stat().st_size)
         return local
     save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1202,7 +1202,7 @@ async def _download(
                     tmp = local.with_suffix(local.suffix + ".tmp")
                     tmp.write_bytes(body)
                     tmp.rename(local)
-                _llm_logger.info("附件下载成功(aiohttp): %s (%s bytes)", local, local.stat().st_size)
+                _llm_logger.info("附件下载成功(aiohttp): %s (%s bytes)", local.resolve(), local.stat().st_size)
                 return local
         except Exception as e:
             last_err = e
@@ -1219,7 +1219,7 @@ async def _download(
         tmp = local.with_suffix(local.suffix + ".tmp")
         tmp.write_bytes(body)
         tmp.rename(local)
-        _llm_logger.info("附件下载成功(requests兜底): %s (%s bytes)", local, local.stat().st_size)
+        _llm_logger.info("附件下载成功(requests兜底): %s (%s bytes)", local.resolve(), local.stat().st_size)
         return local
     except Exception:
         pass
