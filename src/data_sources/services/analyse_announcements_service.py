@@ -122,16 +122,16 @@ def main():
     failed: list[str] = []
     lock = asyncio.Lock()
 
-    async def process_one(aid, entry, session, file_executor):
+    async def process_one(aid, entry, session, retry_executor):
         sf = entry.get("source_file", "")
         read = lambda: Path(sf).read_text(encoding="utf-8", errors="replace")
 
         try:
             async with sem:
                 loop = asyncio.get_running_loop()
-                html = await loop.run_in_executor(file_executor, read)
+                html = await loop.run_in_executor(retry_executor, read)
                 text, links = await loop.run_in_executor(
-                    file_executor,
+                    retry_executor,
                     lambda: _process_html(html, entry.get("url", "")),
                 )
                 items, needs_review = await parse_announcement_fields(
@@ -197,7 +197,7 @@ def main():
             failed.append(aid)
 
     async def _main():
-        file_executor = ThreadPoolExecutor(max_workers=semaphore * 2)
+        retry_executor = ThreadPoolExecutor(max_workers=semaphore * 2)
         conn = aiohttp.TCPConnector(
             limit=semaphore * 2, limit_per_host=semaphore,
             enable_cleanup_closed=True,
@@ -206,7 +206,7 @@ def main():
         async with aiohttp.ClientSession(connector=conn, trust_env=False) as session:
             # 首轮解析
             tasks = [
-                process_one(aid, entry, session, file_executor)
+                process_one(aid, entry, session, retry_executor)
                 for aid, entry in candidates
             ]
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -229,12 +229,12 @@ def main():
                 retry_candidates = [
                     (aid, entry) for aid, entry in candidates if aid in retry_ids
                 ]
-                tasks = [process_one(aid, entry, session, file_executor)
+                tasks = [process_one(aid, entry, session, retry_executor)
                          for aid, entry in retry_candidates]
                 await asyncio.gather(*tasks, return_exceptions=True)
 
                 logger.info("第 %s 轮重试完成: 仍失败 %s 条", retry_i + 1, len(failed))
-        file_executor.shutdown(wait=False)
+        retry_executor.shutdown(wait=False)
 
     asyncio.run(_main())
 
@@ -270,86 +270,87 @@ def main():
         async def _retry_and_reparse():
             nonlocal retry_ok, retry_parsed
             timeout = aiohttp.ClientTimeout(total=300)
-            async with aiohttp.ClientSession(timeout=timeout) as retry_session:
-                succeeded_aids = []
-                for f in failures:
-                    save_dir = DATA_DIR / "raw" / "announcements" / f.get("exchange", "") / "attachments"
-                    save_dir.mkdir(parents=True, exist_ok=True)
-                    try:
-                        await _download(
-                            f["url"], save_dir,
-                            session=retry_session,
-                        )
-                        retry_ok += 1
-                        succeeded_aids.append(f["aid"])
-                        logger.info("  ✓ [%s] %s", f["exchange"], f["title"][:60])
-                    except Exception as e:
-                        logger.warning(
-                            "  ✗ [%s] %s: %s", f["exchange"], f["title"][:60], e,
-                        )
+            with ThreadPoolExecutor(max_workers=4) as retry_executor:
+                async with aiohttp.ClientSession(timeout=timeout) as retry_session:
+                    succeeded_aids = []
+                    for f in failures:
+                        save_dir = DATA_DIR / "raw" / "announcements" / f.get("exchange", "") / "attachments"
+                        save_dir.mkdir(parents=True, exist_ok=True)
+                        try:
+                            await _download(
+                                f["url"], save_dir,
+                                session=retry_session,
+                            )
+                            retry_ok += 1
+                            succeeded_aids.append(f["aid"])
+                            logger.info("  ✓ [%s] %s", f["exchange"], f["title"][:60])
+                        except Exception as e:
+                            logger.warning(
+                                "  ✗ [%s] %s: %s", f["exchange"], f["title"][:60], e,
+                            )
 
-                for aid in set(succeeded_aids):
-                    entry = meta.get(aid)
-                    if not entry:
-                        continue
-                    sf = entry.get("source_file", "")
-                    if not sf or not Path(sf).exists():
-                        continue
-                    try:
-                        loop = asyncio.get_running_loop()
-                        html = await loop.run_in_executor(
-                            file_executor,
-                            lambda: Path(sf).read_text(encoding="utf-8", errors="replace"),
-                        )
-                        text, links = await loop.run_in_executor(
-                            file_executor,
-                            lambda: _process_html(html, entry.get("url", "")),
-                        )
-                        items, needs_review = await parse_announcement_fields(
-                            text=text, links=links,
-                            exchange=entry["exchange"],
-                            title=entry["title"],
-                            publish_date=entry["pub_date"],
-                            category=entry["category"],
-                            attachment_dir=Path(sf).parent,
-                            session=retry_session,
-                            aid=aid,
-                        )
-                        review_flag = 1 if needs_review else 0
-                        async with lock:
-                            if items:
-                                for item in items:
-                                    item.setdefault("announcement_id", aid)
-                                    item.setdefault("publish_date", entry.get("pub_date", ""))
-                                    item.setdefault("exchange", entry["exchange"])
-                                    item.setdefault("announcement_title", entry["title"])
-                                    item.setdefault("page_url", entry["url"])
-                                    item.setdefault("needs_review", review_flag)
-                                    new_rows.append(item)
-                                retry_parsed += 1
-                            else:
-                                new_rows.append({
-                                    "announcement_id": aid,
-                                    "publish_date": entry.get("pub_date", ""),
-                                    "exchange": entry["exchange"],
-                                    "product_code": "", "security_id": "",
-                                    "field": "", "value": "",
-                                    "effective_date": "",
-                                    "announcement_title": entry["title"],
-                                    "evidence": "", "page_url": entry["url"],
-                                    "needs_review": review_flag,
-                                })
-                            seen_ids.add(aid)
-                        logger.info(
-                            "  解析成功 [%s] %s: %s 条",
-                            entry["exchange"], entry["title"][:60],
-                            len(items) if items else 0,
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "  解析失败 [%s] %s: %s",
-                            entry.get("exchange", "?"), entry.get("title", "")[:60], e,
-                        )
+                    for aid in set(succeeded_aids):
+                        entry = meta.get(aid)
+                        if not entry:
+                            continue
+                        sf = entry.get("source_file", "")
+                        if not sf or not Path(sf).exists():
+                            continue
+                        try:
+                            loop = asyncio.get_running_loop()
+                            html = await loop.run_in_executor(
+                                retry_executor,
+                                lambda: Path(sf).read_text(encoding="utf-8", errors="replace"),
+                            )
+                            text, links = await loop.run_in_executor(
+                                retry_executor,
+                                lambda: _process_html(html, entry.get("url", "")),
+                            )
+                            items, needs_review = await parse_announcement_fields(
+                                text=text, links=links,
+                                exchange=entry["exchange"],
+                                title=entry["title"],
+                                publish_date=entry["pub_date"],
+                                category=entry["category"],
+                                attachment_dir=Path(sf).parent,
+                                session=retry_session,
+                                aid=aid,
+                            )
+                            review_flag = 1 if needs_review else 0
+                            async with lock:
+                                if items:
+                                    for item in items:
+                                        item.setdefault("announcement_id", aid)
+                                        item.setdefault("publish_date", entry.get("pub_date", ""))
+                                        item.setdefault("exchange", entry["exchange"])
+                                        item.setdefault("announcement_title", entry["title"])
+                                        item.setdefault("page_url", entry["url"])
+                                        item.setdefault("needs_review", review_flag)
+                                        new_rows.append(item)
+                                    retry_parsed += 1
+                                else:
+                                    new_rows.append({
+                                        "announcement_id": aid,
+                                        "publish_date": entry.get("pub_date", ""),
+                                        "exchange": entry["exchange"],
+                                        "product_code": "", "security_id": "",
+                                        "field": "", "value": "",
+                                        "effective_date": "",
+                                        "announcement_title": entry["title"],
+                                        "evidence": "", "page_url": entry["url"],
+                                        "needs_review": review_flag,
+                                    })
+                                seen_ids.add(aid)
+                            logger.info(
+                                "  解析成功 [%s] %s: %s 条",
+                                entry["exchange"], entry["title"][:60],
+                                len(items) if items else 0,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "  解析失败 [%s] %s: %s",
+                                entry.get("exchange", "?"), entry.get("title", "")[:60], e,
+                            )
         asyncio.run(_retry_and_reparse())
         logger.info("收尾重试: 下载 %s/%s 成功, 解析 %s 条",
                      retry_ok, len(failures), retry_parsed)

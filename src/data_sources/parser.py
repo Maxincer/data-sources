@@ -1286,23 +1286,9 @@ async def parse_announcement_fields(
     atext = ""
     if links and attachment_dir:
         for link in links:
-            try:
-                local = await _download(link["url"], attachment_dir,
-                                 exchange, publish_date, link["url_id"],
-                                 session=session)
-            except BaseException as e:
-                _att_failures.append({
-                    "aid": aid,
-                    "exchange": exchange,
-                    "title": title,
-                    "url": link["url"],
-                    "error": f"{type(e).__name__}: {e}",
-                })
-                _llm_logger.warning(
-                    "附件下载失败 [%s] %s → %s: %s",
-                    exchange, title[:60], link["url"], e, exc_info=True
-                )
-                continue
+            local = await _download(link["url"], attachment_dir,
+                             exchange, publish_date, link["url_id"],
+                             session=session)
             if local:
                 try:
                     t = (_pdf_to_text(local) if link["ext"] == ".pdf"
