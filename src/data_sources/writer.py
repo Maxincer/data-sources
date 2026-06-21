@@ -49,7 +49,7 @@ def security_id_to_product_code(security_id: str) -> str:
     'CU2507' → 'CU', 'PP2509-F' → 'PP-F', 'M2601' → 'M', 'SC2606TAS' → 'SC'.
 
     - 数字后如有 F 后缀, 保留为产品代码的一部分
-    - 数字后如有 TAS 后缀, 剥离
+    - 数字后如有 TAS/EFP 后缀, 剥离
     - 其他模式视为不合法
     """
     m = re.search(r'^([A-Za-z]+)\d+([A-Za-z]+)?$', security_id)
@@ -61,7 +61,7 @@ def security_id_to_product_code(security_id: str) -> str:
     suffix = m.group(2) or ''
     if suffix.upper() == 'F':
         return base + '-F'
-    if suffix.upper() == 'TAS':
+    if suffix.upper() in ['TAS', 'EFP']:
         return base
     if not suffix:
         return base
