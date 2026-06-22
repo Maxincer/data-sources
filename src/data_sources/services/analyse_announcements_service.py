@@ -24,8 +24,6 @@ from mxz_utils.logging_config import get_logger
 from data_sources.parser import (
     _process_html,
     parse_announcement_fields,
-    clear_attachment_failures,
-    get_attachment_failures,
     clean_attachment_orphans,
     _download,
 )
@@ -80,7 +78,6 @@ def should_parse(entry: dict) -> bool:
 
 
 def main():
-    clear_attachment_failures()
 
     if not META_FILE.exists():
         logger.error("metadata 不存在: %s", META_FILE)
@@ -257,111 +254,7 @@ def main():
     else:
         logger.info("解析: 全部成功")
 
-    # 附件下载失败汇总 + 收尾重试
-    failures = get_attachment_failures()
-    if failures:
-        logger.warning("=" * 50)
-        logger.warning("附件下载失败汇总: %s 条", len(failures))
-        for f in failures:
-            logger.warning("  [%s] %s", f["exchange"], f["title"][:60])
-            logger.warning("    URL: %s", f["url"])
-            logger.warning("    Error: %s", f["error"])
-
-        # 收尾重试：下载失败附件 → 成功后完整重跑 parse_announcement_fields
-        logger.info("=" * 50)
-        logger.info("收尾重试失败附件: %s 条", len(failures))
-        retry_ok = 0
-        retry_parsed = 0
-        async def _retry_and_reparse():
-            nonlocal retry_ok, retry_parsed
-            timeout = aiohttp.ClientTimeout(total=300)
-            with ThreadPoolExecutor(max_workers=4) as retry_executor:
-                async with aiohttp.ClientSession(timeout=timeout) as retry_session:
-                    succeeded_aids = []
-                    for f in failures:
-                        save_dir = DATA_DIR / "raw" / "announcements" / f.get("exchange", "") / "attachments"
-                        save_dir.mkdir(parents=True, exist_ok=True)
-                        try:
-                            await _download(
-                                f["url"], save_dir,
-                                session=retry_session,
-                            )
-                            retry_ok += 1
-                            succeeded_aids.append(f["aid"])
-                            logger.info("  ✓ [%s] %s", f["exchange"], f["title"][:60])
-                        except Exception as e:
-                            logger.warning(
-                                "  ✗ [%s] %s: %s", f["exchange"], f["title"][:60], e,
-                            )
-
-                    for aid in set(succeeded_aids):
-                        entry = meta.get(aid)
-                        if not entry:
-                            continue
-                        sf = entry.get("source_file", "")
-                        if not sf or not Path(sf).exists():
-                            continue
-                        try:
-                            loop = asyncio.get_running_loop()
-                            html = await loop.run_in_executor(
-                                retry_executor,
-                                lambda: Path(sf).read_text(encoding="utf-8", errors="replace"),
-                            )
-                            text, links = await loop.run_in_executor(
-                                retry_executor,
-                                lambda: _process_html(html, entry.get("url", "")),
-                            )
-                            items, needs_review = await parse_announcement_fields(
-                                text=text, links=links,
-                                exchange=entry["exchange"],
-                                title=entry["title"],
-                                publish_date=entry["pub_date"],
-                                category=entry["category"],
-                                attachment_dir=Path(sf).parent,
-                                session=retry_session,
-                                aid=aid,
-                            )
-                            review_flag = 1 if needs_review else 0
-                            async with lock:
-                                if items:
-                                    for item in items:
-                                        item.setdefault("announcement_id", aid)
-                                        item.setdefault("publish_date", entry.get("pub_date", ""))
-                                        item.setdefault("exchange", entry["exchange"])
-                                        item.setdefault("announcement_title", entry["title"])
-                                        item.setdefault("page_url", entry["url"])
-                                        item.setdefault("needs_review", review_flag)
-                                        new_rows.append(item)
-                                    retry_parsed += 1
-                                else:
-                                    new_rows.append({
-                                        "announcement_id": aid,
-                                        "publish_date": entry.get("pub_date", ""),
-                                        "exchange": entry["exchange"],
-                                        "product_code": "", "security_id": "",
-                                        "field": "", "value": "",
-                                        "effective_date": "",
-                                        "announcement_title": entry["title"],
-                                        "evidence": "", "page_url": entry["url"],
-                                        "needs_review": review_flag,
-                                    })
-                                seen_ids.add(aid)
-                            logger.info(
-                                "  解析成功 [%s] %s: %s 条",
-                                entry["exchange"], entry["title"][:60],
-                                len(items) if items else 0,
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                "  解析失败 [%s] %s: %s",
-                                entry.get("exchange", "?"), entry.get("title", "")[:60], e,
-                            )
-        asyncio.run(_retry_and_reparse())
-        logger.info("收尾重试: 下载 %s/%s 成功, 解析 %s 条",
-                     retry_ok, len(failures), retry_parsed)
-        logger.warning("=" * 50)
-    else:
-        logger.info("附件下载: 全部成功")
+    logger.info("附件下载: 全部成功")
 
     if dry_run:
         logger.info("DRY RUN — 不写入文件")

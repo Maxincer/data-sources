@@ -1055,20 +1055,6 @@ _DS_BASE = "https://api.deepseek.com"
 _DS_KEY = os.environ["DEEPSEEK_API_KEY"]
 _DS_MODEL = "deepseek-v4-flash"
 
-# 附件下载失败累积列表
-_att_failures: list[dict] = []
-
-
-def clear_attachment_failures():
-    """清空附件失败列表(每次运行前调用)。"""
-    _att_failures.clear()
-
-
-def get_attachment_failures() -> list[dict]:
-    """获取附件下载失败列表。"""
-    return list(_att_failures)
-
-
 def upsert_attachment_metadata(
     aid: str, url: str, exchange: str, title: str,
     category: str, pub_date: str, filepath: Path,
