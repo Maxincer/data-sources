@@ -1232,8 +1232,8 @@ async def _download(
         try:
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(_PW_EXECUTOR, _pw_download, url, local)
-        except Exception:
-            pass
+        except Exception as e:
+            _llm_logger.debug("Playwright 下载失败: %s %s", url, e)
 
     last_err = None
     import requests as _http_requests
