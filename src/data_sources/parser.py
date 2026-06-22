@@ -1229,12 +1229,19 @@ def _pw_download(url: str, local_path: Path):
             download_ref[0] = download
         page.on("download", on_download)
 
-        # 两次 goto, 不管报错, 最后检查下载结果
+        # 两次 goto, 不管报错
         for _ in range(2):
             try:
                 page.goto(url, wait_until="networkidle", timeout=90000)
             except Exception:
                 pass
+
+        # 下载事件异步触发，等一小段时间让事件完成
+        import time as _time
+        for _ in range(20):
+            if download_ref[0] is not None:
+                break
+            _time.sleep(0.5)
 
         if download_ref[0] is None:
             raise RuntimeError("Playwright 未捕获到下载事件")
