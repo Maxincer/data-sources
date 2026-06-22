@@ -1181,12 +1181,19 @@ def _get_pw_browser():
 
 
 def _pw_download(url: str, local_path: Path):
-    """用 Playwright 下载文件, 绕过 JS challenge WAF."""
+    """用 Playwright 下载文件, 绕过 JS challenge WAF.
+
+    策略：第一次 goto 触发 JS challenge 设置 cookie 并完成自动重载,
+    第二次 goto 带 cookie 拿到真实文件。
+    """
     _, browser = _get_pw_browser()
     ctx = browser.new_context(locale="zh-CN", user_agent=_BROWSER_HEADERS["User-Agent"])
     page = ctx.new_page()
     try:
-        resp = page.goto(url, wait_until="networkidle", timeout=60000)
+        # 第一次访问：触发 JS challenge，等待自动重载完成
+        page.goto(url, wait_until="networkidle", timeout=90000)
+        # 第二次访问：cookie 已设置，应返回真实文件
+        resp = page.goto(url, wait_until="networkidle", timeout=90000)
         if resp is None or not resp.ok:
             raise RuntimeError(f"Playwright HTTP {resp.status if resp else 'N/A'}")
         body = resp.body()
