@@ -1208,25 +1208,38 @@ def _get_pw_browser():
 def _pw_download(url: str, local_path: Path):
     """用 Playwright 下载文件, 绕过 Tencent EdgeOne JS challenge WAF.
 
-    策略：第一次 goto 触发 JS challenge 设 cookie 并自动重载,
-    第二次 goto 带 cookie 拿到真实文件。
+    GFEX 的 Tencent EdgeOne JS challenge:
+      1. 第一次访问返回 JS challenge 页面
+      2. 浏览器执行 JS 设置 cookie
+      3. 第二次访问带 cookie, CDN 放行, 返回 PDF
+      4. 但 GFEX 以 Content-Disposition: attachment 触发浏览器下载,
+         而非正常页面导航。Playwright 需用 on('download') 捕获。
     """
     _, browser = _get_pw_browser()
-    ctx = browser.new_context(locale="zh-CN", user_agent=_BROWSER_HEADERS["User-Agent"])
+    ctx = browser.new_context(
+        locale="zh-CN",
+        user_agent=_BROWSER_HEADERS["User-Agent"],
+        accept_downloads=True,
+    )
     page = ctx.new_page()
+
     try:
-        # 第一次：触发 JS challenge
-        page.goto(url, wait_until="networkidle", timeout=90000)
-        # 第二次：cookie 已设置，应返回真实文件
-        resp = page.goto(url, wait_until="networkidle", timeout=90000)
-        if resp is None or not resp.ok:
-            raise RuntimeError(f"Playwright HTTP {resp.status if resp else 'N/A'}")
-        body = resp.body()
-        if len(body) < 5000:
-            raise RuntimeError(f"WAF/bot challenge (playwright, {len(body)} bytes)")
-        tmp = local_path.with_suffix(local_path.suffix + ".tmp")
-        tmp.write_bytes(body)
-        tmp.rename(local_path)
+        download_ref = [None]
+        def on_download(download):
+            download_ref[0] = download
+        page.on("download", on_download)
+
+        # 两次 goto, 不管报错, 最后检查下载结果
+        for _ in range(2):
+            try:
+                page.goto(url, wait_until="networkidle", timeout=90000)
+            except Exception:
+                pass
+
+        if download_ref[0] is None:
+            raise RuntimeError("Playwright 未捕获到下载事件")
+
+        download_ref[0].save_as(str(local_path))
         return local_path
     finally:
         ctx.close()
