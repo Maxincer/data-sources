@@ -1199,42 +1199,66 @@ _BROWSER_HEADERS = {
 }
 
 
-# 请求间隔控制：同 host 两次请求之间至少间隔 REQUEST_INTERVAL 秒
+# 附件下载统计（每次运行前重置）
+_attachment_download_stats: dict[str, int] = {"success": 0, "fail": 0}
+
+
+def reset_attachment_stats():
+    _attachment_download_stats["success"] = 0
+    _attachment_download_stats["fail"] = 0
+
+
+def get_attachment_stats() -> dict[str, int]:
+    return dict(_attachment_download_stats)
+
+
+# 同 host 串行锁 + 请求间隔控制
+_host_locks: dict[str, threading.Lock] = {}
+_host_locks_init = threading.Lock()
+_REQUEST_INTERVAL = 3.0
 _last_request_time: dict[str, float] = {}
-_REQUEST_INTERVAL = 2.0
 
 
 def _sync_download(url: str, local_path: Path) -> Path:
-    """同步下载附件，带请求间隔控制，防止触发 WAF。"""
+    """同步下载附件，同 host 串行 + 带间隔控制，防止触发 WAF。"""
     host = urlparse(url).hostname or ""
 
-    # 请求间隔控制：同 host 至少间隔 REQUEST_INTERVAL 秒
-    last = _last_request_time.get(host, 0.0)
-    since_last = time.time() - last
-    if since_last < _REQUEST_INTERVAL:
-        time.sleep(_REQUEST_INTERVAL - since_last)
-    _last_request_time[host] = time.time()
+    # 获取/创建 per-host 锁
+    with _host_locks_init:
+        if host not in _host_locks:
+            _host_locks[host] = threading.Lock()
+        host_lock = _host_locks[host]
 
-    local_path.parent.mkdir(parents=True, exist_ok=True)
+    # 同 host 串行：一个下载完，下一个才能开始
+    with host_lock:
+        # 请求间隔控制
+        last = _last_request_time.get(host, 0.0)
+        since_last = time.time() - last
+        if since_last < _REQUEST_INTERVAL:
+            time.sleep(_REQUEST_INTERVAL - since_last)
+        _last_request_time[host] = time.time()
 
-    last_err = None
-    for attempt in range(3):
-        try:
-            resp = requests.get(url, headers=_BROWSER_HEADERS, timeout=30)
-            resp.raise_for_status()
-            body = resp.content
-            # 反爬 WAF 检测：JS challenge 页面 ≈ 几百字节，非真实 PDF
-            if len(body) < 5000 or b"EO_Bot_Ssid" in body:
-                raise RuntimeError(f"WAF/bot challenge ({len(body)} bytes)")
-            tmp = local_path.with_suffix(local_path.suffix + ".tmp")
-            tmp.write_bytes(body)
-            tmp.rename(local_path)
-            return local_path
-        except Exception as e:
-            last_err = e
-            if attempt < 2:
-                time.sleep(2 ** (attempt + 1))
-    raise RuntimeError(f"{last_err} url={url} local={local_path}") from last_err
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+
+        last_err = None
+        for attempt in range(3):
+            try:
+                resp = requests.get(url, headers=_BROWSER_HEADERS, timeout=60)
+                resp.raise_for_status()
+                body = resp.content
+                if len(body) < 5000 or b"EO_Bot_Ssid" in body:
+                    raise RuntimeError(f"WAF/bot challenge ({len(body)} bytes)")
+                tmp = local_path.with_suffix(local_path.suffix + ".tmp")
+                tmp.write_bytes(body)
+                tmp.rename(local_path)
+                _attachment_download_stats["success"] += 1
+                return local_path
+            except Exception as e:
+                last_err = e
+                if attempt < 2:
+                    time.sleep(3 * (2 ** attempt))
+        _attachment_download_stats["fail"] += 1
+        raise RuntimeError(f"{last_err} url={url} local={local_path}") from last_err
 
 
 async def _download(

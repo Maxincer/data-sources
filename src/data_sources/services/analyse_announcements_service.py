@@ -25,6 +25,8 @@ from data_sources.parser import (
     _process_html,
     parse_announcement_fields,
     clean_attachment_orphans,
+    reset_attachment_stats,
+    get_attachment_stats,
     _download,
 )
 
@@ -87,6 +89,7 @@ def main():
         meta = json.load(f)
 
     clean_attachment_orphans(meta)
+    reset_attachment_stats()
 
     seen_ids = load_existing()
 
@@ -254,7 +257,15 @@ def main():
     else:
         logger.info("解析: 全部成功")
 
-    logger.info("附件下载: 全部成功")
+    stats = get_attachment_stats()
+    if stats["fail"]:
+        logger.warning(
+            "附件下载: %s 成功, %s 失败", stats["success"], stats["fail"],
+        )
+    else:
+        logger.info(
+            "附件下载: 全部成功 (%s 个附件)", stats["success"],
+        )
 
     if dry_run:
         logger.info("DRY RUN — 不写入文件")
