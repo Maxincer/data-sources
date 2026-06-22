@@ -1572,7 +1572,7 @@ async def parse_announcement_fields(
                       "response_format": {"type": "json_object"},
                       "temperature": 0, "max_tokens": 393216},
                 timeout=aiohttp.ClientTimeout(
-                total=600, connect=30, sock_read=300
+                total=600, connect=120, sock_read=300
             ),
             ) as r:
                 r.raise_for_status()
