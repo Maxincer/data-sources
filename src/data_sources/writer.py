@@ -140,24 +140,47 @@ class OrderLimitBook:
                         as_of_date: int = 0) -> dict:
         """在指定 level 中按 effective_date 累积应用规则, 返回最新 minoq/maxoq.
         as_of_date: YYYYMMDD, 仅取 <= 该日期的规则。
+        精确合约(security_id)匹配优先于通配(ALL), 同级别内最新 effective_date 取胜。
         """
+        def _match(sid: str) -> bool:
+            """True=精确匹配, False=通配ALL, None=不匹配"""
+            if sid == contract_code:
+                return True
+            if sid == "ALL":
+                return False
+            return None
+
         result = {"minoq": None, "maxoq": None}
+        # 第一遍：通配 ALL
         for sort_key, ex, pc, sid, field, val in self._rules[level]:
             if ex != exchange:
                 continue
-            # 跳过未来生效的规则
             if as_of_date > 0 and sort_key > as_of_date:
                 continue
-            # 品种匹配: 具体品种 或 通配
             if pc != variety_id and pc != "ALL":
                 continue
-            # 合约匹配: 具体合约 或 通配
-            if sid != "ALL" and sid != contract_code:
+            if _match(sid) is not False:
                 continue
             if field == "minoq":
                 result["minoq"] = val
             elif field == "maxoq":
                 result["maxoq"] = val
+
+        # 第二遍：精确合约匹配，覆盖通配值
+        for sort_key, ex, pc, sid, field, val in self._rules[level]:
+            if ex != exchange:
+                continue
+            if as_of_date > 0 and sort_key > as_of_date:
+                continue
+            if pc != variety_id and pc != "ALL":
+                continue
+            if _match(sid) is not True:
+                continue
+            if field == "minoq":
+                result["minoq"] = val
+            elif field == "maxoq":
+                result["maxoq"] = val
+
         return result
 
     def get(self, exchange: str, contract_code: str,
