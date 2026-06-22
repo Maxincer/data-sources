@@ -214,6 +214,10 @@ def inject_order_limits(records: list) -> list:
         limits = book.get(exchange, raw.upper(), as_of_date=as_of_date)
         # 交易所日频数据优先级高于公告：只填补缺失，不覆盖
         if "minoq" not in rec and limits["minoq"] is not None:
+            logger.debug(
+                "注入 minoq=%s [%s] %s (aid=%s, as_of=%s)",
+                limits["minoq"], exchange, raw, "??", as_of_date,
+            )
             rec["minoq"] = limits["minoq"]
         if "maxoq" not in rec and limits["maxoq"] is not None:
             rec["maxoq"] = limits["maxoq"]
