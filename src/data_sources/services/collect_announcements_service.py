@@ -1815,14 +1815,14 @@ def _collect_shfe_historical(ctx, meta: dict):
         )
 
         targets = []
+        matched_keywords = set()
         for href, title in links:
             title = title.strip()
             if not title:
                 continue
-            # 匹配目标规则
             for kw in _SHFE_HISTORICAL_TARGETS:
-                if kw in title:
-                    # 补全相对路径
+                if kw in title and kw not in matched_keywords:
+                    matched_keywords.add(kw)
                     if href.startswith("/"):
                         full_url = f"https://www.shfe.com.cn{href}"
                     elif href.startswith("./"):
