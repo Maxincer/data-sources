@@ -26,6 +26,7 @@ from data_sources.parser import (
     parse_announcement_fields,
     clear_attachment_failures,
     get_attachment_failures,
+    clean_attachment_orphans,
     _download,
 )
 
@@ -88,12 +89,16 @@ def main():
     with open(META_FILE, "r", encoding="utf-8") as f:
         meta = json.load(f)
 
+    clean_attachment_orphans(meta)
+
     seen_ids = load_existing()
 
     logger.info("metadata 总数: %s 条", len(meta))
 
     candidates = []
     for aid, entry in meta.items():
+        if "_attachment_" in aid:
+            continue
         if aid in seen_ids:
             continue
         if not should_parse(entry):

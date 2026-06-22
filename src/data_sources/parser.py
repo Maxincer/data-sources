@@ -1069,10 +1069,17 @@ def get_attachment_failures() -> list[dict]:
     return list(_att_failures)
 
 
-def upsert_attachment_metadata(aid: str, url: str, exchange: str, title: str,
-                               category: str, pub_date: str, filepath: Path):
-    """附件下载成功后，写入 announcements_metadata.json."""
-    att_id = f"{aid}_att_{filepath.stem}"
+def upsert_attachment_metadata(
+    aid: str, url: str, exchange: str, title: str,
+    category: str, pub_date: str, filepath: Path,
+    link_index: int = 0, status: str = "downloaded",
+):
+    """附件下载结果写入 announcements_metadata.json.
+
+    key 格式: {aid}_attachment_{link_index}
+    status: downloaded / failed to download
+    """
+    att_id = f"{aid}_attachment_{link_index}"
     now = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%dT%H:%M:%S+08:00")
     rec = {
         "id": att_id,
@@ -1082,8 +1089,8 @@ def upsert_attachment_metadata(aid: str, url: str, exchange: str, title: str,
         "exchange": exchange,
         "category": category,
         "pub_date": pub_date,
-        "source_file": str(filepath),
-        "status": "downloaded",
+        "source_file": str(filepath) if status == "downloaded" else "",
+        "status": status,
         "downloaded_at": now,
     }
     META_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -1104,6 +1111,64 @@ def upsert_attachment_metadata(aid: str, url: str, exchange: str, title: str,
         # 文件不存在时首次创建
         with open(META_FILE, "w", encoding="utf-8") as f:
             json.dump({att_id: rec}, f, ensure_ascii=False, indent=2)
+
+
+def clean_attachment_orphans(meta: dict[str, dict]):
+    """附件双向清理：
+    - 文件存在但 metadata 无记录 → 删文件
+    - metadata 标 downloaded 但文件不存在 → 标 failed to download
+    """
+    raw_dir = DATA_DIR / "raw" / "announcements" / "exchanges"
+    if not raw_dir.exists():
+        return
+
+    # 收集 metadata 中所有附件的 source_file 路径
+    meta_paths: set[str] = set()
+    dirty_keys: list[str] = []
+    for key, rec in meta.items():
+        if "_attachment_" not in key:
+            continue
+        sf = rec.get("source_file", "")
+        if sf and rec.get("status") == "downloaded":
+            meta_paths.add(sf)
+            fp = Path(sf)
+            if not fp.exists():
+                dirty_keys.append(key)
+
+    # 删除孤儿文件（存在但 metadata 无记录）
+    att_suffixes = {".pdf", ".xlsx", ".xls"}
+    removed = 0
+    for fpath in sorted(raw_dir.rglob("*")):
+        if fpath.is_file() and fpath.suffix in att_suffixes:
+            if str(fpath) not in meta_paths:
+                fpath.unlink(missing_ok=True)
+                removed += 1
+
+    # 清理残留 .tmp 文件
+    for fpath in sorted(raw_dir.rglob("*.tmp")):
+        if fpath.is_file():
+            fpath.unlink(missing_ok=True)
+
+    if removed:
+        _llm_logger.info("附件双向清理: 删除 %s 个孤儿文件", removed)
+
+    # 脏记录标记为失败
+    changed = False
+    for key in dirty_keys:
+        meta[key]["status"] = "failed to download"
+        _llm_logger.warning(
+            "附件双向清理: %s 文件不存在, 已标为失败", key,
+        )
+        changed = True
+
+    if changed:
+        with open(META_FILE, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+
+    # 清理空目录
+    for dirpath in sorted(raw_dir.rglob("*"), reverse=True):
+        if dirpath.is_dir() and not any(dirpath.iterdir()):
+            dirpath.rmdir()
 
 
 def _load_prompt(name: str) -> str:
@@ -1331,45 +1396,52 @@ async def parse_announcement_fields(
         except (FileNotFoundError, json.JSONDecodeError):
             _att_cache = {}
 
-        for link in links:
-            # 查缓存：遍历 metadata 按 url 字段匹配
-            att_record = None
-            if _att_cache:
-                for rec in _att_cache.values():
-                    if rec.get("url") == link["url"]:
-                        att_record = rec
-                        break
-            if att_record:
-                cached_path = Path(att_record["source_file"])
+        for link_index, link in enumerate(links):
+            att_key = f"{aid}_attachment_{link_index}"
+
+            # 查缓存：按新 key 格式直接取
+            att_record = _att_cache.get(att_key) if _att_cache else None
+            if att_record and att_record.get("status") == "downloaded":
+                cached_path = Path(att_record["source_file"]).resolve()
                 if cached_path.exists():
                     local = cached_path
                     _llm_logger.info(
                         "附件命中缓存: %s (%s bytes)",
                         local.resolve(), local.stat().st_size,
                     )
-                    if local:
-                        try:
-                            t = (_pdf_to_text(local) if link["ext"] == ".pdf"
-                                 else _xlsx_to_text(local))
-                            atext += f"\n[附件:{local.name}]\n{t}\n"
-                        except Exception:
-                            _llm_logger.debug("附件解析失败: %s", local.name)
+                    try:
+                        t = (_pdf_to_text(local) if link["ext"] == ".pdf"
+                             else _xlsx_to_text(local))
+                        atext += f"\n[附件:{local.name}]\n{t}\n"
+                    except Exception:
+                        _llm_logger.debug("附件解析失败: %s", local.name)
                     continue
 
-            local = await _download(link["url"], attachment_dir,
-                             exchange, publish_date, link["url_id"],
-                             session=session)
-            if local:
+            # 下载
+            try:
+                local = await _download(link["url"], attachment_dir,
+                                 exchange, publish_date, link["url_id"],
+                                 session=session)
+            except Exception as e:
+                _llm_logger.warning("附件下载失败: %s %s", link["url"], e)
                 upsert_attachment_metadata(
                     aid, link["url"], exchange, title,
-                    category, publish_date, local,
+                    category, publish_date, Path(),
+                    link_index=link_index, status="failed to download",
                 )
-                try:
-                    t = (_pdf_to_text(local) if link["ext"] == ".pdf"
+                continue
+
+            upsert_attachment_metadata(
+                aid, link["url"], exchange, title,
+                category, publish_date, local,
+                link_index=link_index,
+            )
+            try:
+                t = (_pdf_to_text(local) if link["ext"] == ".pdf"
                          else _xlsx_to_text(local))
-                    atext += f"\n[附件:{local.name}]\n{t}\n"
-                except Exception:
-                    _llm_logger.debug("附件解析失败: %s", local.name)
+                atext += f"\n[附件:{local.name}]\n{t}\n"
+            except Exception:
+                _llm_logger.debug("附件解析失败: %s", local.name)
 
     full_text = text + atext
 
