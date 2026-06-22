@@ -1224,11 +1224,6 @@ def _pw_download(url: str, local_path: Path):
     page = ctx.new_page()
 
     try:
-        download_ref = [None]
-        def on_download(download):
-            download_ref[0] = download
-        page.on("download", on_download)
-
         # 两次 goto, 不管报错
         for _ in range(2):
             try:
@@ -1236,17 +1231,9 @@ def _pw_download(url: str, local_path: Path):
             except Exception:
                 pass
 
-        # 下载事件异步触发，等一小段时间让事件完成
-        import time as _time
-        for _ in range(20):
-            if download_ref[0] is not None:
-                break
-            _time.sleep(0.5)
-
-        if download_ref[0] is None:
-            raise RuntimeError("Playwright 未捕获到下载事件")
-
-        download_ref[0].save_as(str(local_path))
+        # 等待异步下载事件（GFEX 以 Content-Disposition 触发下载）
+        download = page.wait_for_event("download", timeout=30000)
+        download.save_as(str(local_path))
         return local_path
     finally:
         ctx.close()
