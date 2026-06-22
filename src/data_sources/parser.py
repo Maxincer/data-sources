@@ -1512,9 +1512,9 @@ async def parse_announcement_fields(
                              else _docx_to_text(local) if link["ext"] == ".docx"
                              else _xlsx_to_text(local))
                         atext += f"\n[附件:{local.name}]\n{t}\n"
-                    except Exception:
-                        _llm_logger.debug("附件解析失败: %s", local.name)
-                    continue
+                    except Exception as parse_err:
+                        _llm_logger.warning("附件解析失败, 任务取消: %s %s", local.name, parse_err)
+                        raise
 
             # 下载
             try:
