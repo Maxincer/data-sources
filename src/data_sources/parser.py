@@ -1473,11 +1473,22 @@ def _process_html(html, page_url=""):
     return text, links
 
 
-def _pad_eff_date(eff_date: str) -> str:
+def _pad_eff_date(eff_date: str, publish_date: str = "") -> str:
     """补位 effective_date: YYYY → YYYYMMDD, YYYYMM → YYYYMMDD.
-    如 eff_date 为空则返回 'YYYYMMDD'."""
+    如 eff_date 为空则用 publish_date 的下一个交易日填充。
+    publish_date 不全时用 01 逐级补位。"""
     d = eff_date.strip().replace("-", "")
     if not d:
+        if publish_date:
+            # publish_date 不全时补位："2026" → "20260101", "202604" → "20260401"
+            pd = publish_date.strip().replace("-", "")
+            if len(pd) == 4:
+                pd = f"{pd}0101"
+            elif len(pd) == 6:
+                pd = f"{pd}01"
+            if len(pd) >= 8:
+                from data_sources.trade_date import next_trading_date
+                return next_trading_date(pd[:8]) or pd[:8]
         return "YYYYMMDD"
     if len(d) >= 8:
         return d[:8]
