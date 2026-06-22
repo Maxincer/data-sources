@@ -212,9 +212,10 @@ def inject_order_limits(records: list) -> list:
         # 取当前记录交易日作为 as_of_date, 跳过未来生效的规则
         as_of_date = int(rec.get("date", "0")) if rec.get("date") else 0
         limits = book.get(exchange, raw.upper(), as_of_date=as_of_date)
-        if "minoq" not in rec and limits["minoq"] is not None:
+        # 公告规则优先于交易所日频数据：始终覆盖
+        if limits["minoq"] is not None:
             rec["minoq"] = limits["minoq"]
-        if "maxoq" not in rec and limits["maxoq"] is not None:
+        if limits["maxoq"] is not None:
             rec["maxoq"] = limits["maxoq"]
     return records
 
