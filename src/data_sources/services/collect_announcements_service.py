@@ -1655,6 +1655,7 @@ def collect_ine():
 # ══════════════════════════════════════════════════════
 
 SHFE_BASE = _exchange_dir("SHFE")
+INE_BASE = _exchange_dir("INE")
 
 SHFE_RULE_CATEGORIES = [
     ("rules", "general",
@@ -1782,6 +1783,17 @@ _SHFE_HISTORICAL_TARGETS = [
 ]
 
 
+_IN_KEYWORDS = ["上海国际能源交易中心", "能源中心"]
+
+
+def _resolve_exchange(title: str) -> str:
+    """从公告标题判断实际所属交易所。SHFE 会代发 INE 公告。"""
+    for kw in _IN_KEYWORDS:
+        if kw in title:
+            return "INE"
+    return "SHFE"
+
+
 def _collect_shfe_historical(ctx, meta: dict):
     """从 SHFE 历史版本页采集指定规则的最新版本。
 
@@ -1869,7 +1881,7 @@ def _collect_shfe_historical(ctx, meta: dict):
                     "id": aid,
                     "url": a["url"],
                     "title": a["title"],
-                    "exchange": "SHFE",
+                    "exchange": _resolve_exchange(a["title"]),
                     "category": "general",
                     "pub_date": pub_date,
                     "source_file": str(fp),
@@ -1950,7 +1962,7 @@ def collect_shfe():
                         "id": aid,
                         "url": url,
                         "title": a["title"],
-                        "exchange": "SHFE",
+                        "exchange": _resolve_exchange(a["title"]),
                         "category": cat,
                         "pub_date": pd,
                         "source_file": str(fp),
