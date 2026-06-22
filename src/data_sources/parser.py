@@ -1266,7 +1266,7 @@ async def _download(
         return local
     except Exception:
         pass
-    raise last_err
+    raise RuntimeError(f"{last_err} url={url} local={local}") from last_err
 
 
 def _pdf_to_text(pdf_path):
