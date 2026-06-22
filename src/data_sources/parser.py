@@ -1181,6 +1181,58 @@ def _extract_links(html, page_url):
     return results
 
 
+# Playwright 绕过 Tencent EdgeOne JS challenge WAF
+_PW_EXCHANGES = {"GFEX", "SHFE", "INE", "CFFEX"}
+_PW_BROWSER: tuple | None = None
+_PW_LOCK = threading.Lock()
+
+
+def _get_pw_browser():
+    """获取或创建全局 Playwright browser 实例. 线程安全的懒加载."""
+    global _PW_BROWSER
+    if _PW_BROWSER is not None:
+        return _PW_BROWSER
+    with _PW_LOCK:
+        if _PW_BROWSER is not None:
+            return _PW_BROWSER
+        from playwright.sync_api import sync_playwright
+        p = sync_playwright().start()
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+        )
+        _PW_BROWSER = (p, browser)
+    return _PW_BROWSER
+
+
+def _pw_download(url: str, local_path: Path):
+    """用 Playwright 下载文件, 绕过 Tencent EdgeOne JS challenge WAF.
+
+    策略：第一次 goto 触发 JS challenge 设 cookie 并自动重载,
+    第二次 goto 带 cookie 拿到真实文件。
+    """
+    _, browser = _get_pw_browser()
+    ctx = browser.new_context(locale="zh-CN", user_agent=_BROWSER_HEADERS["User-Agent"])
+    page = ctx.new_page()
+    try:
+        # 第一次：触发 JS challenge
+        page.goto(url, wait_until="networkidle", timeout=90000)
+        # 第二次：cookie 已设置，应返回真实文件
+        resp = page.goto(url, wait_until="networkidle", timeout=90000)
+        if resp is None or not resp.ok:
+            raise RuntimeError(f"Playwright HTTP {resp.status if resp else 'N/A'}")
+        body = resp.body()
+        if len(body) < 5000:
+            raise RuntimeError(f"WAF/bot challenge (playwright, {len(body)} bytes)")
+        tmp = local_path.with_suffix(local_path.suffix + ".tmp")
+        tmp.write_bytes(body)
+        tmp.rename(local_path)
+        return local_path
+    finally:
+        ctx.close()
+        page.close()
+
+
 _BROWSER_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -1219,8 +1271,8 @@ _REQUEST_INTERVAL = 3.0
 _last_request_time: dict[str, float] = {}
 
 
-def _sync_download(url: str, local_path: Path) -> Path:
-    """同步下载附件，同 host 串行 + 带间隔控制，防止触发 WAF。"""
+def _sync_download(url: str, local_path: Path, exchange: str = "") -> Path:
+    """下载附件，同 host 串行 + 间隔控制。高反爬交易所优先用 Playwright。"""
     host = urlparse(url).hostname or ""
 
     # 获取/创建 per-host 锁
@@ -1240,6 +1292,16 @@ def _sync_download(url: str, local_path: Path) -> Path:
 
         local_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # 高反爬交易所：Playwright 优先
+        if exchange in _PW_EXCHANGES:
+            try:
+                result = _pw_download(url, local_path)
+                _attachment_download_stats["success"] += 1
+                return result
+            except Exception as e:
+                _llm_logger.debug("Playwright 下载失败, 回退 requests: %s", e)
+
+        # requests 重试
         last_err = None
         for attempt in range(3):
             try:
@@ -1279,7 +1341,7 @@ async def _download(
         return local
 
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _sync_download, url, local)
+    return await loop.run_in_executor(None, _sync_download, url, local, exchange)
 
 
 def _pdf_to_text(pdf_path):
