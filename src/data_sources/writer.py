@@ -136,11 +136,17 @@ class OrderLimitBook:
         )
 
     def _best_for_level(self, level: str, exchange: str,
-                        variety_id: str, contract_code: str) -> dict:
-        """在指定 level 中按 effective_date 累积应用规则, 返回最新 minoq/maxoq."""
+                        variety_id: str, contract_code: str,
+                        as_of_date: int = 0) -> dict:
+        """在指定 level 中按 effective_date 累积应用规则, 返回最新 minoq/maxoq.
+        as_of_date: YYYYMMDD, 仅取 <= 该日期的规则。
+        """
         result = {"minoq": None, "maxoq": None}
-        for _, ex, pc, sid, field, val in self._rules[level]:
+        for sort_key, ex, pc, sid, field, val in self._rules[level]:
             if ex != exchange:
+                continue
+            # 跳过未来生效的规则
+            if as_of_date > 0 and sort_key > as_of_date:
                 continue
             # 品种匹配: 具体品种 或 通配
             if pc != variety_id and pc != "ALL":
@@ -154,8 +160,10 @@ class OrderLimitBook:
                 result["maxoq"] = val
         return result
 
-    def get(self, exchange: str, contract_code: str) -> dict:
+    def get(self, exchange: str, contract_code: str,
+            as_of_date: int = 0) -> dict:
         """按优先级 (daily > product > general) 取最新 minoq/maxoq.
+        as_of_date: YYYYMMDD, 仅取 <= 该日期的规则。
         返回: {"minoq": int|None, "maxoq": int|None}
         """
         # 无数字 → 品种级代码（如 A, V, L-F, PP-F），直接作为 variety_id
@@ -166,7 +174,9 @@ class OrderLimitBook:
             variety_id = security_id_to_product_code(contract_code)
         result = {"minoq": None, "maxoq": None}
         for lv in self.LEVELS:
-            lv_result = self._best_for_level(lv, exchange, variety_id, contract_code)
+            lv_result = self._best_for_level(
+                lv, exchange, variety_id, contract_code, as_of_date,
+            )
             for fld in ("minoq", "maxoq"):
                 if result[fld] is None and lv_result[fld] is not None:
                     result[fld] = lv_result[fld]
@@ -199,7 +209,9 @@ def inject_order_limits(records: list) -> list:
         if exchange is None:
             continue
         raw = code.split(".")[0]
-        limits = book.get(exchange, raw.upper())
+        # 取当前记录交易日作为 as_of_date, 跳过未来生效的规则
+        as_of_date = int(rec.get("date", "0")) if rec.get("date") else 0
+        limits = book.get(exchange, raw.upper(), as_of_date=as_of_date)
         if "minoq" not in rec and limits["minoq"] is not None:
             rec["minoq"] = limits["minoq"]
         if "maxoq" not in rec and limits["maxoq"] is not None:
