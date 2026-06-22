@@ -62,6 +62,20 @@ def prev_trading_date(date_or_str) -> str | None:
     return trade_dates[idx - 1] if idx > 0 else None
 
 
+def next_trading_date(date_or_str) -> str | None:
+    """
+    查找给定日期之后的第一个交易日（不含自身）。
+    """
+    d = _normalize(date_or_str)
+    if d is None:
+        return None
+    trade_dates = load()
+    if not trade_dates:
+        return None
+    idx = bisect_right(trade_dates, d)
+    return trade_dates[idx] if idx < len(trade_dates) else None
+
+
 def nearest(date_or_str) -> str | None:
     """
     向前查找最近交易日（含自身）。

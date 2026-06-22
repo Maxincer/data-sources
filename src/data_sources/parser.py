@@ -1630,8 +1630,8 @@ async def parse_announcement_fields(
             ) from e
         if field not in ("minoq", "maxoq"):
             continue
-        # effective_date: 缺失或不全时用占位字母补位
-        eff_date = _pad_eff_date(item.get("effective_date", ""))
+        # effective_date: 缺失时用 publish_date 的下一个交易日
+        eff_date = _pad_eff_date(item.get("effective_date", ""), publish_date)
         results.append({
             "product_code": str(pc),
             "security_id": str(sid),
@@ -1773,7 +1773,7 @@ def _parse_fields_sync(
             raise KeyError(f"LLM 输出缺少字段 {e} [{exchange}] {title[:80]}") from e
         if field not in ("minoq", "maxoq"):
             continue
-        eff_date = _pad_eff_date(item.get("effective_date", ""))
+        eff_date = _pad_eff_date(item.get("effective_date", ""), publish_date)
         results.append({
             "product_code": str(pc),
             "security_id": str(sid),
@@ -1783,3 +1783,5 @@ def _parse_fields_sync(
             "evidence": str(evidence),
         })
     return results, needs_review
+
+
