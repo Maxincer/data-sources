@@ -17,10 +17,13 @@ import json
 import os
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor
+import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from urllib.parse import urlparse
+
 import aiohttp
+import requests
 from bs4 import BeautifulSoup
 
 import openpyxl
@@ -61,18 +64,7 @@ _ZHIPU_KEY = os.environ["ZHIPU_API_KEY"]
 _ZHIPU_URL = os.environ["ZHIPU_BASE_URL"]
 _ZHIPU_VISION_MODEL = os.environ["ZHIPU_VISION_MODEL"]
 
-# 单主机并发信号量，防 IP 级 WAF（如 gfex.com.cn 同 IP >1 并发即触发反爬）
-_HOST_SEM: dict[str, asyncio.Semaphore] = {}
 
-
-def _host_semaphore(url: str) -> asyncio.Semaphore:
-    """按 origin 返回信号量，gfex.com.cn → 1，其他 → 10。"""
-    from urllib.parse import urlparse
-    host = urlparse(url).hostname or ""
-    if host not in _HOST_SEM:
-        limit = 1 if "gfex" in host else 10
-        _HOST_SEM[host] = asyncio.Semaphore(limit)
-    return _HOST_SEM[host]
 
 
 
@@ -1156,57 +1148,42 @@ _BROWSER_HEADERS = {
 }
 
 
-_PW_EXCHANGES = {"GFEX", "SHFE", "INE", "CFFEX"}
-_PW_BROWSER: tuple | None = None
-_PW_LOCK = threading.Lock()
-_PW_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pw")
+# 请求间隔控制：同 host 两次请求之间至少间隔 REQUEST_INTERVAL 秒
+_last_request_time: dict[str, float] = {}
+_REQUEST_INTERVAL = 1.0
 
 
-def _get_pw_browser():
-    """获取或创建全局 Playwright browser 实例. 线程安全的懒加载."""
-    global _PW_BROWSER
-    if _PW_BROWSER is not None:
-        return _PW_BROWSER
-    with _PW_LOCK:
-        if _PW_BROWSER is not None:
-            return _PW_BROWSER
-        from playwright.sync_api import sync_playwright
-        p = sync_playwright().start()
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-        )
-        _PW_BROWSER = (p, browser)
-    return _PW_BROWSER
+def _sync_download(url: str, local_path: Path) -> Path:
+    """同步下载附件，带请求间隔控制，防止触发 WAF。"""
+    host = urlparse(url).hostname or ""
 
+    # 请求间隔控制：同 host 至少间隔 REQUEST_INTERVAL 秒
+    last = _last_request_time.get(host, 0.0)
+    since_last = time.time() - last
+    if since_last < _REQUEST_INTERVAL:
+        time.sleep(_REQUEST_INTERVAL - since_last)
+    _last_request_time[host] = time.time()
 
-def _pw_download(url: str, local_path: Path):
-    """用 Playwright 下载文件, 绕过 JS challenge WAF.
+    local_path.parent.mkdir(parents=True, exist_ok=True)
 
-    策略：第一次 goto 触发 JS challenge 设置 cookie 并完成自动重载,
-    第二次 goto 带 cookie 拿到真实文件。
-    """
-    _, browser = _get_pw_browser()
-    ctx = browser.new_context(locale="zh-CN", user_agent=_BROWSER_HEADERS["User-Agent"])
-    page = ctx.new_page()
-    try:
-        # 第一次访问：触发 JS challenge，等待自动重载完成
-        page.goto(url, wait_until="networkidle", timeout=90000)
-        # 第二次访问：cookie 已设置，应返回真实文件
-        resp = page.goto(url, wait_until="networkidle", timeout=90000)
-        if resp is None or not resp.ok:
-            raise RuntimeError(f"Playwright HTTP {resp.status if resp else 'N/A'}")
-        body = resp.body()
-        if len(body) < 5000:
-            raise RuntimeError(f"WAF/bot challenge (playwright, {len(body)} bytes)")
-        tmp = local_path.with_suffix(local_path.suffix + ".tmp")
-        tmp.write_bytes(body)
-        tmp.rename(local_path)
-        _llm_logger.info("附件下载成功: %s (%s bytes)", local_path.resolve(), local_path.stat().st_size)
-        return local_path
-    finally:
-        ctx.close()
-        page.close()
+    last_err = None
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, headers=_BROWSER_HEADERS, timeout=30)
+            resp.raise_for_status()
+            body = resp.content
+            # 反爬 WAF 检测：JS challenge 页面 ≈ 几百字节，非真实 PDF
+            if len(body) < 5000 or b"EO_Bot_Ssid" in body:
+                raise RuntimeError(f"WAF/bot challenge ({len(body)} bytes)")
+            tmp = local_path.with_suffix(local_path.suffix + ".tmp")
+            tmp.write_bytes(body)
+            tmp.rename(local_path)
+            return local_path
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"{last_err} url={url} local={local_path}") from last_err
 
 
 async def _download(
@@ -1225,55 +1202,9 @@ async def _download(
     if local.exists():
         _llm_logger.info("附件下载成功: %s (%s bytes)", local.resolve(), local.stat().st_size)
         return local
-    save_dir.mkdir(parents=True, exist_ok=True)
 
-    # 高反爬交易所用 Playwright 绕过 JS challenge
-    if exchange in _PW_EXCHANGES:
-        try:
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(_PW_EXECUTOR, _pw_download, url, local)
-        except Exception as e:
-            _llm_logger.debug("Playwright 下载失败: %s %s", url, e)
-
-    last_err = None
-    import requests as _http_requests
-    for attempt in range(3):
-        try:
-            async with _host_semaphore(url):
-                async with session.get(
-                    url, timeout=aiohttp.ClientTimeout(total=300),
-                    headers=_BROWSER_HEADERS,
-                ) as r:
-                    r.raise_for_status()
-                    body = await r.read()
-                    # 反爬 WAF 检测：JS challenge 页面 ≈ 几百字节，非真实 PDF
-                    if len(body) < 5000 or b"EO_Bot_Ssid" in body:
-                        raise RuntimeError(f"WAF/bot challenge ({len(body)} bytes)")
-                    tmp = local.with_suffix(local.suffix + ".tmp")
-                    tmp.write_bytes(body)
-                    tmp.rename(local)
-                _llm_logger.info("附件下载成功(aiohttp): %s (%s bytes)", local.resolve(), local.stat().st_size)
-                return local
-        except Exception as e:
-            last_err = e
-            if attempt < 2:
-                await asyncio.sleep(2 * (attempt + 1))
-    # aiohttp 全部失败时，用 requests 兜底（某些 WAF 对 aiohttp 限制更严）
-    try:
-        loop = asyncio.get_running_loop()
-        body = await loop.run_in_executor(None, lambda: _http_requests.get(
-            url, headers=_BROWSER_HEADERS, timeout=30,
-        ).content)
-        if len(body) < 5000:
-            raise RuntimeError(f"WAF/bot challenge (requests fallback, {len(body)} bytes)")
-        tmp = local.with_suffix(local.suffix + ".tmp")
-        tmp.write_bytes(body)
-        tmp.rename(local)
-        _llm_logger.info("附件下载成功(requests兜底): %s (%s bytes)", local.resolve(), local.stat().st_size)
-        return local
-    except Exception:
-        pass
-    raise RuntimeError(f"{last_err} url={url} local={local}") from last_err
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _sync_download, url, local)
 
 
 def _pdf_to_text(pdf_path):
