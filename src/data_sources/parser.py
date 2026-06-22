@@ -1150,7 +1150,7 @@ _BROWSER_HEADERS = {
 
 # 请求间隔控制：同 host 两次请求之间至少间隔 REQUEST_INTERVAL 秒
 _last_request_time: dict[str, float] = {}
-_REQUEST_INTERVAL = 1.0
+_REQUEST_INTERVAL = 2.0
 
 
 def _sync_download(url: str, local_path: Path) -> Path:
@@ -1182,7 +1182,7 @@ def _sync_download(url: str, local_path: Path) -> Path:
         except Exception as e:
             last_err = e
             if attempt < 2:
-                time.sleep(2 * (attempt + 1))
+                time.sleep(2 ** (attempt + 1))
     raise RuntimeError(f"{last_err} url={url} local={local_path}") from last_err
 
 
