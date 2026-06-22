@@ -1459,7 +1459,7 @@ async def parse_announcement_fields(
                     category, publish_date, Path(),
                     link_index=link_index, status="failed to download",
                 )
-                continue
+                raise
 
             upsert_attachment_metadata(
                 aid, link["url"], exchange, title,
