@@ -1769,6 +1769,121 @@ def _shfe_extract_daily(page) -> list[dict]:
     return articles
 
 
+SHFE_HISTORICAL_URL = (
+    "https://www.shfe.com.cn/regulation/exchangerules/historicalversion/"
+)
+
+# 需要从历史版本中采集的目标规则标题关键词
+_SHFE_HISTORICAL_TARGETS = [
+    "风险控制管理办法",
+    "异常交易行为管理办法",
+    "期权交易管理办法",
+    "交易管理办法",
+]
+
+
+def _collect_shfe_historical(ctx, meta: dict):
+    """从 SHFE 历史版本页采集指定规则的最新版本。
+
+    部分规则公告（如风险控制管理办法）的原始版本含正确的 effective_date，
+    而后续重申公告可能仅确认规则不变，无新生效日期。
+    通过采集历史版本页获取原始规则文档，补充 effective_date 上下文。
+    """
+    page = ctx.new_page()
+    try:
+        _goto_with_retry(page, SHFE_HISTORICAL_URL, timeout=60000)
+        time.sleep(3)
+
+        # 处理 WAF JS challenge: 等待页面真正加载完成
+        for _ in range(3):
+            try:
+                page.wait_for_load_state("networkidle", timeout=30000)
+            except Exception:
+                pass
+            time.sleep(1)
+            html = page.content()
+            # 如果页面仍有 WAF 标记, 继续等待
+            if "safeline_bot_challenge" in html or "当前正在对访问请求进行人机识别" in html:
+                time.sleep(2)
+                continue
+            break
+
+        # 提取所有规则链接
+        links = re.findall(
+            r'<a[^>]*href="([^"]+)"[^>]*>([^<]+)</a>',
+            page.content(),
+        )
+
+        targets = []
+        for href, title in links:
+            title = title.strip()
+            if not title:
+                continue
+            # 匹配目标规则
+            for kw in _SHFE_HISTORICAL_TARGETS:
+                if kw in title:
+                    # 补全相对路径
+                    if href.startswith("/"):
+                        full_url = f"https://www.shfe.com.cn{href}"
+                    elif href.startswith("./"):
+                        full_url = SHFE_HISTORICAL_URL + href[2:]
+                    else:
+                        full_url = SHFE_HISTORICAL_URL + href
+                    targets.append({"title": title, "url": full_url})
+                    logger.info("[SHFE] 历史版本匹配: %s -> %s", title, full_url)
+                    break
+
+        if not targets:
+            logger.warning("[SHFE] 历史版本: 未找到目标规则")
+            return
+
+        # 下载匹配的规则
+        for a in targets:
+            aid = _shfe_article_id(a["url"])
+            if aid in meta:
+                logger.debug("[SHFE] 历史版本已存在: %s", aid)
+                continue
+
+            m = re.search(r"t(\d{8})_(\d+)", a["url"])
+            pub_date = m.group(1) if m else "00000000"
+            url_id = m.group(2) if m else aid[-8:]
+            fname = f"SHFE_{pub_date}_{url_id}.html"
+            fp = SHFE_BASE / "general" / fname
+            fp.parent.mkdir(parents=True, exist_ok=True)
+
+            try:
+                _goto_with_retry(page, a["url"], timeout=30000)
+                time.sleep(1)
+                html = page.content()
+                if len(html) <= 500:
+                    logger.warning("[SHFE] 历史版本内容过短: %s %s", aid, a["title"])
+                    continue
+
+                fail_reason = _check_download(html, "SHFE", aid, a["title"], a["url"])
+                if fail_reason:
+                    logger.warning("[SHFE] 历史版本检查失败: %s %s", aid, fail_reason)
+                    continue
+
+                _locked_write_html(fp, html)
+                upsert_record(aid, {
+                    "id": aid,
+                    "url": a["url"],
+                    "title": a["title"],
+                    "exchange": "SHFE",
+                    "category": "general",
+                    "pub_date": pub_date,
+                    "source_file": str(fp),
+                    "status": "downloaded",
+                    "downloaded_at": _now_str(),
+                })
+                meta[aid] = True
+                logger.info("  ✓ [history] %s | %s", aid, a["title"][:50])
+            except Exception as e:
+                logger.warning("[SHFE] 历史版本下载失败 %s: %s", a["title"], e)
+    finally:
+        page.close()
+
+
 def collect_shfe():
     """SHFE 全量采集: 规则类 + 公告通知. 全部用 Playwright."""
     meta = load_metadata()
@@ -1914,6 +2029,10 @@ def collect_shfe():
                          len(new_d))
         else:
             logger.warning("[SHFE] 公告: 未发现新公告")
+
+        # ── 历史版本规则 ──
+        logger.info("[SHFE] 采集历史版本规则")
+        _collect_shfe_historical(ctx, meta)
 
         browser.close()
 
