@@ -18,6 +18,7 @@ import os
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
@@ -1185,6 +1186,7 @@ def _extract_links(html, page_url):
 _PW_EXCHANGES = {"GFEX", "SHFE", "INE", "CFFEX"}
 _PW_BROWSER: tuple | None = None
 _PW_LOCK = threading.Lock()
+_PW_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pw")
 
 
 def _get_pw_browser():
@@ -1299,15 +1301,6 @@ def _sync_download(url: str, local_path: Path, exchange: str = "") -> Path:
 
         local_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # 高反爬交易所：Playwright 优先
-        if exchange in _PW_EXCHANGES:
-            try:
-                result = _pw_download(url, local_path)
-                _attachment_download_stats["success"] += 1
-                return result
-            except Exception as e:
-                _llm_logger.debug("Playwright 下载失败, 回退 requests: %s", e)
-
         # requests 重试
         last_err = None
         for attempt in range(3):
@@ -1346,6 +1339,14 @@ async def _download(
     if local.exists():
         _llm_logger.info("附件下载成功: %s (%s bytes)", local.resolve(), local.stat().st_size)
         return local
+
+    # 高反爬交易所：Playwright 优先（专用单线程 executor，避免 greenlet 跨线程冲突）
+    if exchange in _PW_EXCHANGES:
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(_PW_EXECUTOR, _pw_download, url, local)
+        except Exception as e:
+            _llm_logger.debug("Playwright 下载失败, 回退 requests: %s", e)
 
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _sync_download, url, local, exchange)
