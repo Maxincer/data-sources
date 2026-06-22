@@ -1170,7 +1170,7 @@ def _extract_links(html, page_url):
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
         ext = Path(href).suffix.lower()
-        if ext in (".pdf", ".xls", ".xlsx"):
+        if ext in (".pdf", ".xls", ".xlsx", ".docx"):
             abs_url = urljoin(page_url, href)
             # 从 URL 提取纯数字/字母 ID(去除中文和路径分隔符)
             raw_name = unquote(abs_url.split("/")[-1].split("?")[0])
@@ -1327,6 +1327,25 @@ def _xlsx_to_text(path):
             wb.close()
 
 
+def _docx_to_text(path: Path) -> str:
+    """提取 .docx 文件的纯文本内容（内置 zipfile 解析，无需 python-docx）。"""
+    import zipfile
+    import xml.etree.ElementTree as ET
+    try:
+        with zipfile.ZipFile(path) as z:
+            xml_content = z.read("word/document.xml")
+        root = ET.fromstring(xml_content)
+        ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+        texts = []
+        for t in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t"):
+            if t.text:
+                texts.append(t.text)
+        return "\n".join(texts)
+    except Exception:
+        _llm_logger.warning("DOCX 解析失败: %s", path.name)
+        return ""
+
+
 def _process_html(html, page_url=""):
     """同步 HTML 预处理:提取正文 + 附件链接。放 executor 执行。"""
     soup = BeautifulSoup(html, "html.parser")
@@ -1397,6 +1416,7 @@ async def parse_announcement_fields(
                     )
                     try:
                         t = (_pdf_to_text(local) if link["ext"] == ".pdf"
+                             else _docx_to_text(local) if link["ext"] == ".docx"
                              else _xlsx_to_text(local))
                         atext += f"\n[附件:{local.name}]\n{t}\n"
                     except Exception:
@@ -1424,6 +1444,7 @@ async def parse_announcement_fields(
             )
             try:
                 t = (_pdf_to_text(local) if link["ext"] == ".pdf"
+                         else _docx_to_text(local) if link["ext"] == ".docx"
                          else _xlsx_to_text(local))
                 atext += f"\n[附件:{local.name}]\n{t}\n"
             except Exception:
