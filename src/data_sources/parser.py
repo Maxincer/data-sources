@@ -11,6 +11,7 @@ Stat tracking: total_records, missing count per field, missing deviation.
 """
 
 import asyncio
+import base64
 import csv
 import fcntl
 import json
@@ -18,10 +19,8 @@ import os
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from urllib.parse import urlparse
 
 import aiohttp
 import requests
@@ -1182,64 +1181,52 @@ def _extract_links(html, page_url):
     return results
 
 
-# Playwright 绕过 Tencent EdgeOne JS challenge WAF
-_PW_EXCHANGES = {"GFEX", "SHFE", "INE", "CFFEX"}
-_PW_BROWSER: tuple | None = None
-_PW_LOCK = threading.Lock()
-_PW_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pw")
+# ═══════════════════════════════════════════════
+# 全局下载令牌桶（全局速率限制，替代 per-host 锁）
+# ═══════════════════════════════════════════════
+
+class _TokenBucket:
+    """线程安全的令牌桶，限制全局下载速率。支持 sync 和 async 两种 acquire。"""
+    def __init__(self, interval: float):
+        self.interval = interval  # 秒/个
+        self.lock = threading.Lock()
+        self._async_lock = asyncio.Lock()
+        self._last = 0.0
+
+    def acquire_sync(self):
+        """同步阻塞直到获取到 token。"""
+        with self.lock:
+            now = time.monotonic()
+            since_last = now - self._last
+            if since_last < self.interval:
+                time.sleep(self.interval - since_last)
+            self._last = time.monotonic()
+
+    async def acquire_async(self):
+        """异步等待直到获取到 token。"""
+        async with self._async_lock:
+            now = time.monotonic()
+            since_last = now - self._last
+            if since_last < self.interval:
+                await asyncio.sleep(self.interval - since_last)
+            self._last = time.monotonic()
 
 
-def _get_pw_browser():
-    """获取或创建全局 Playwright browser 实例. 线程安全的懒加载."""
-    global _PW_BROWSER
-    if _PW_BROWSER is not None:
-        return _PW_BROWSER
-    with _PW_LOCK:
-        if _PW_BROWSER is not None:
-            return _PW_BROWSER
-        from playwright.sync_api import sync_playwright
-        p = sync_playwright().start()
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-        )
-        _PW_BROWSER = (p, browser)
-    return _PW_BROWSER
+# 全局下载限流器：每秒放行一个请求
+_DOWNLOAD_BUCKET = _TokenBucket(1.0)
 
 
-def _pw_download(url: str, local_path: Path):
-    """用 Playwright 下载文件, 绕过 Tencent EdgeOne JS challenge WAF.
+# 附件下载统计（每次运行前重置）
+_attachment_download_stats: dict[str, int] = {"success": 0, "fail": 0}
 
-    GFEX 的 Tencent EdgeOne JS challenge:
-      1. 第一次访问返回 JS challenge 页面
-      2. 浏览器执行 JS 设置 cookie
-      3. 第二次访问带 cookie, CDN 放行, 返回 PDF
-      4. 但 GFEX 以 Content-Disposition: attachment 触发浏览器下载,
-         而非正常页面导航。Playwright 需用 on('download') 捕获。
-    """
-    _, browser = _get_pw_browser()
-    ctx = browser.new_context(
-        locale="zh-CN",
-        user_agent=_BROWSER_HEADERS["User-Agent"],
-        accept_downloads=True,
-    )
-    page = ctx.new_page()
 
-    try:
-        # 两次 goto, 不管报错
-        for _ in range(2):
-            try:
-                page.goto(url, wait_until="networkidle", timeout=90000)
-            except Exception:
-                pass
+def reset_attachment_stats():
+    _attachment_download_stats["success"] = 0
+    _attachment_download_stats["fail"] = 0
 
-        # 等待异步下载事件（GFEX 以 Content-Disposition 触发下载）
-        download = page.wait_for_event("download", timeout=30000)
-        download.save_as(str(local_path))
-        return local_path
-    finally:
-        ctx.close()
-        page.close()
+
+def get_attachment_stats() -> dict[str, int]:
+    return dict(_attachment_download_stats)
 
 
 _BROWSER_HEADERS = {
@@ -1260,67 +1247,96 @@ _BROWSER_HEADERS = {
 }
 
 
-# 附件下载统计（每次运行前重置）
-_attachment_download_stats: dict[str, int] = {"success": 0, "fail": 0}
+# Playwright 绕过 Tencent EdgeOne JS challenge WAF
+_PW_EXCHANGES = {"GFEX", "SHFE", "INE", "CFFEX"}
 
 
-def reset_attachment_stats():
-    _attachment_download_stats["success"] = 0
-    _attachment_download_stats["fail"] = 0
+async def _pw_download_async(url: str, local_path: Path) -> Path:
+    """异步 Playwright page.evaluate(fetch) 绕过 Tencent EdgeOne JS challenge WAF。
 
+    先 acquire 令牌桶，再用 playwright async API 在浏览器内 fetch。
+    重试路径不走 playwright，fallback 到 _sync_download（requests）。
+    需设置环境变量 PLAYWRIGHT_BROWSERS_PATH。
+    """
+    await _DOWNLOAD_BUCKET.acquire_async()
 
-def get_attachment_stats() -> dict[str, int]:
-    return dict(_attachment_download_stats)
+    if not os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        raise RuntimeError(
+            "Playwright 浏览器路径未设置: 请 export PLAYWRIGHT_BROWSERS_PATH"
+        )
 
+    from playwright.async_api import async_playwright
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+        )
+        ctx = await browser.new_context(
+            locale="zh-CN", user_agent=_BROWSER_HEADERS["User-Agent"]
+        )
+        page = await ctx.new_page()
+        try:
+            # 两次 goto 触发并完成 JS challenge（前者触发 CDN 种 cookie，后者带 cookie 放行）
+            for _ in range(2):
+                try:
+                    await page.goto(url, wait_until="networkidle", timeout=90000)
+                except Exception:
+                    pass
 
-# 同 host 串行锁 + 请求间隔控制
-_host_locks: dict[str, threading.Lock] = {}
-_host_locks_init = threading.Lock()
-_REQUEST_INTERVAL = 3.0
-_last_request_time: dict[str, float] = {}
+            # 用浏览器 HTTP 栈请求文件，不触发下载管理器
+            resp = await page.request.get(url)
+            if not resp.ok:
+                raise RuntimeError(f"HTTP {resp.status}")
+            body = await resp.body()
+
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.write_bytes(body)
+            _attachment_download_stats["success"] += 1
+            _llm_logger.info(
+                "✅ Playwright 附件下载成功 [%s] %s bytes → %s",
+                url, local_path.stat().st_size, local_path.resolve(),
+            )
+            return local_path
+        except Exception as e:
+            _attachment_download_stats["fail"] += 1
+            _llm_logger.warning("❌ Playwright 附件下载失败 [%s]: %s", url, e)
+            raise RuntimeError(f"Playwright 下载失败: {e} url={url}") from e
+        finally:
+            await page.close()
+            await ctx.close()
+            await browser.close()
 
 
 def _sync_download(url: str, local_path: Path, exchange: str = "") -> Path:
-    """下载附件，同 host 串行 + 间隔控制。高反爬交易所优先用 Playwright。"""
-    host = urlparse(url).hostname or ""
+    """用 requests 下载附件，全局令牌桶限速。"""
+    _DOWNLOAD_BUCKET.acquire_sync()
 
-    # 获取/创建 per-host 锁
-    with _host_locks_init:
-        if host not in _host_locks:
-            _host_locks[host] = threading.Lock()
-        host_lock = _host_locks[host]
+    local_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 同 host 串行：一个下载完，下一个才能开始
-    with host_lock:
-        # 请求间隔控制
-        last = _last_request_time.get(host, 0.0)
-        since_last = time.time() - last
-        if since_last < _REQUEST_INTERVAL:
-            time.sleep(_REQUEST_INTERVAL - since_last)
-        _last_request_time[host] = time.time()
-
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # requests 重试
-        last_err = None
-        for attempt in range(3):
-            try:
-                resp = requests.get(url, headers=_BROWSER_HEADERS, timeout=60)
-                resp.raise_for_status()
-                body = resp.content
-                if len(body) < 5000 or b"EO_Bot_Ssid" in body:
-                    raise RuntimeError(f"WAF/bot challenge ({len(body)} bytes)")
-                tmp = local_path.with_suffix(local_path.suffix + ".tmp")
-                tmp.write_bytes(body)
-                tmp.rename(local_path)
-                _attachment_download_stats["success"] += 1
-                return local_path
-            except Exception as e:
-                last_err = e
-                if attempt < 2:
-                    time.sleep(3 * (2 ** attempt))
-        _attachment_download_stats["fail"] += 1
-        raise RuntimeError(f"{last_err} url={url} local={local_path}") from last_err
+    last_err = None
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, headers=_BROWSER_HEADERS, timeout=60)
+            resp.raise_for_status()
+            body = resp.content
+            if len(body) < 5000 or b"EO_Bot_Ssid" in body:
+                raise RuntimeError(f"WAF/bot challenge ({len(body)} bytes)")
+            tmp = local_path.with_suffix(local_path.suffix + ".tmp")
+            tmp.write_bytes(body)
+            tmp.rename(local_path)
+            _attachment_download_stats["success"] += 1
+            _llm_logger.info(
+                "✅ 附件下载成功 [%s] %s bytes → %s",
+                url, local_path.stat().st_size, local_path.resolve(),
+            )
+            return local_path
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(10)
+    _attachment_download_stats["fail"] += 1
+    _llm_logger.warning("❌ 附件下载失败 [%s]: %s", url, last_err)
+    raise RuntimeError(f"{last_err} url={url} local={local_path}") from last_err
 
 
 async def _download(
@@ -1337,17 +1353,11 @@ async def _download(
             fname = f"att_{abs(hash(url)) % 10**8}{ext}"
     local = save_dir / fname
     if local.exists():
-        _llm_logger.info("附件下载成功: %s (%s bytes)", local.resolve(), local.stat().st_size)
+        _llm_logger.info("附件命中缓存: %s (%s bytes)", local.resolve(), local.stat().st_size)
         return local
 
-    # 高反爬交易所：Playwright 优先（专用单线程 executor，避免 greenlet 跨线程冲突）
     if exchange in _PW_EXCHANGES:
-        loop = asyncio.get_running_loop()
-        try:
-            return await loop.run_in_executor(_PW_EXECUTOR, _pw_download, url, local)
-        except Exception as e:
-            _llm_logger.debug("Playwright 下载失败, 回退 requests: %s", e)
-
+        return await _pw_download_async(url, local)
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _sync_download, url, local, exchange)
 
@@ -1523,7 +1533,7 @@ async def parse_announcement_fields(
                                  exchange, publish_date, link["url_id"],
                                  session=session)
             except Exception as e:
-                _llm_logger.warning("附件下载失败: %s %s", link["url"], e)
+                _llm_logger.warning("❌ 附件下载失败 [%s]: %s", link["url"], e)
                 upsert_attachment_metadata(
                     aid, link["url"], exchange, title,
                     category, publish_date, Path(),
@@ -1621,6 +1631,148 @@ async def parse_announcement_fields(
         if field not in ("minoq", "maxoq"):
             continue
         # effective_date: 缺失或不全时用占位字母补位
+        eff_date = _pad_eff_date(item.get("effective_date", ""))
+        results.append({
+            "product_code": str(pc),
+            "security_id": str(sid),
+            "field": field,
+            "value": int(val),
+            "effective_date": eff_date,
+            "evidence": str(evidence),
+        })
+    return results, needs_review
+
+
+def _parse_fields_sync(
+    text: str, links: list, exchange: str, title: str,
+    publish_date: str, category: str = "",
+    attachment_dir=None, aid: str = "",
+) -> list[dict]:
+    """同步版 parse_announcement_fields，用 requests 替代 aiohttp。供重试用。"""
+    import requests as _sync_req
+
+    # 附件下载
+    atext = ""
+    if links and attachment_dir:
+        _att_cache = None
+        try:
+            with open(META_FILE, encoding="utf-8") as f:
+                _att_cache = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            _att_cache = {}
+
+        for link_index, link in enumerate(links):
+            att_key = f"{aid}_attachment_{link_index}"
+            att_record = _att_cache.get(att_key) if _att_cache else None
+            if att_record and att_record.get("status") == "downloaded":
+                cached_path = Path(att_record["source_file"]).resolve()
+                if cached_path.exists():
+                    local = cached_path
+                    _llm_logger.info("附件命中缓存: %s (%s bytes)", local.resolve(), local.stat().st_size)
+                    try:
+                        t = (_pdf_to_text(local) if link["ext"] == ".pdf"
+                             else _docx_to_text(local) if link["ext"] == ".docx"
+                             else _xlsx_to_text(local))
+                        atext += f"\n[附件:{local.name}]\n{t}\n"
+                    except Exception as parse_err:
+                        _llm_logger.warning("附件解析失败, 任务取消: %s %s", local.name, parse_err)
+                        raise
+
+            # 下载
+            ext = Path(link["url"]).suffix or ".pdf"
+            if exchange and publish_date and link.get("url_id"):
+                fname = f"{exchange}_{publish_date}_{link['url_id']}{ext}"
+            else:
+                fname = Path(link["url"]).name.split("?")[0]
+                if not fname or "." not in fname:
+                    fname = f"att_{abs(hash(link['url'])) % 10**8}{ext}"
+            local = attachment_dir / fname
+            if not local.exists():
+                try:
+                    _sync_download(link["url"], local, exchange)
+                except Exception as e:
+                    _llm_logger.warning("❌ 附件下载失败 [%s]: %s", link["url"], e)
+                    upsert_attachment_metadata(
+                        aid, link["url"], exchange, title,
+                        category, publish_date, Path(),
+                        link_index=link_index, status="failed to download",
+                    )
+                    raise
+            upsert_attachment_metadata(
+                aid, link["url"], exchange, title,
+                category, publish_date, local,
+                link_index=link_index,
+            )
+            try:
+                t = (_pdf_to_text(local) if link["ext"] == ".pdf"
+                     else _docx_to_text(local) if link["ext"] == ".docx"
+                     else _xlsx_to_text(local))
+                atext += f"\n[附件:{local.name}]\n{t}\n"
+            except Exception:
+                _llm_logger.debug("附件解析失败: %s", local.name)
+
+    full_text = text + atext
+
+    prompt = (
+        _load_prompt("extract_fields.txt")
+        + f"\n交易所:{exchange} 发布日期:{publish_date} 类别:{category}"
+        + f"\n\n公告内容:\n\n{full_text}"
+    )
+
+    last_error = None
+    for retry_i in range(5):
+        try:
+            if retry_i > 0:
+                delay = 2 ** retry_i
+                _llm_logger.debug(
+                    "DS_RETRY [%s] %s: 第 %s/5 次, 等待 %ss",
+                    exchange, title[:80], retry_i + 1, delay,
+                )
+                time.sleep(delay)
+            _llm_logger.debug("DS_REQ [%s] %s", exchange, title[:80])
+            resp = _sync_req.post(
+                f"{_DS_BASE}/chat/completions",
+                headers={"Authorization": f"Bearer {_DS_KEY}",
+                         "Content-Type": "application/json"},
+                json={"model": _DS_MODEL,
+                      "messages": [{"role": "user", "content": prompt}],
+                      "response_format": {"type": "json_object"},
+                      "temperature": 0, "max_tokens": 393216},
+                timeout=(120, 600),
+            )
+            resp.raise_for_status()
+            raw = resp.json()["choices"][0]["message"]["content"]
+            _llm_logger.info("DS_RAW [%s] %s: %s", exchange, title[:80], raw)
+            break
+        except (_sync_req.ConnectionError, _sync_req.Timeout) as e:
+            last_error = e
+            _llm_logger.warning("DS_ERR [%s] %s: %s", exchange, title[:80], e)
+        except BaseException as e:
+            _llm_logger.warning("DS_ERR [%s] %s: %s", exchange, title[:80], e, exc_info=True)
+            raise
+    else:
+        _llm_logger.warning("DS_ERR [%s] %s: %s", exchange, title[:80], last_error, exc_info=True)
+        raise last_error
+
+    raw = raw.strip()
+    data = json.loads(raw)
+    items = data if isinstance(data, list) else data.get("items", [])
+    needs_review = (
+        False if isinstance(data, list)
+        else bool(data.get("needs_review", False))
+    )
+    results = []
+    for item in items:
+        try:
+            pc = item["product_code"]
+            sid = item["security_id"]
+            field = item["field"]
+            val = item["value"]
+            evidence = item["evidence"]
+        except KeyError as e:
+            raise KeyError(f"LLM 输出缺少字段 {e} [{exchange}] {title[:80]}") from e
+        if field not in ("minoq", "maxoq"):
+            continue
         eff_date = _pad_eff_date(item.get("effective_date", ""))
         results.append({
             "product_code": str(pc),

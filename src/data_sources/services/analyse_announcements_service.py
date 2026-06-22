@@ -13,6 +13,7 @@ import csv
 import json
 import os
 import sys
+import time
 from asyncio import Semaphore
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -23,6 +24,7 @@ from mxz_utils.logging_config import get_logger
 
 from data_sources.parser import (
     _process_html,
+    _parse_fields_sync,
     parse_announcement_fields,
     clean_attachment_orphans,
     reset_attachment_stats,
@@ -110,6 +112,7 @@ def main():
         candidates.append((aid, entry))
 
     candidates.sort(key=lambda x: (x[1].get("pub_date", ""), x[0]))
+    candidates_map = dict(candidates)
     logger.info("待解析: %s 条", len(candidates))
 
     if not candidates:
@@ -201,7 +204,55 @@ def main():
             )
             failed.append(aid)
 
-    async def _main():
+    def _retry_one_sync(aid: str, entry: dict) -> None:
+        """同步重试一条失败公告：读HTML → 解析 → 下载附件 → LLM解析 → 写结果。"""
+        sf = entry.get("source_file", "")
+        html = Path(sf).read_text(encoding="utf-8", errors="replace")
+        text, links = _process_html(html, entry.get("url", ""))
+        items, needs_review = _parse_fields_sync(
+            text=text, links=links,
+            exchange=entry["exchange"], title=entry["title"],
+            publish_date=entry["pub_date"], category=entry.get("category", ""),
+            attachment_dir=Path(sf).parent, aid=aid,
+        )
+        review_flag = 1 if needs_review else 0
+        if not items:
+            skipped[0] += 1
+            new_rows.append({
+                "announcement_id": aid,
+                "publish_date": entry.get("pub_date", ""),
+                "exchange": entry["exchange"],
+                "product_code": "",
+                "security_id": "",
+                "field": "",
+                "value": "",
+                "effective_date": "",
+                "announcement_title": entry["title"],
+                "evidence": "",
+                "page_url": entry["url"],
+                "needs_review": review_flag,
+            })
+            logger.debug("  → 无 minoq/maxoq 信息 [%s] %s", entry["exchange"], aid)
+            return
+        for item in items:
+            new_rows.append({
+                "announcement_id": aid,
+                "publish_date": entry.get("pub_date", ""),
+                "exchange": entry["exchange"],
+                "product_code": item["product_code"],
+                "security_id": item["security_id"],
+                "field": item["field"],
+                "value": str(item["value"]),
+                "effective_date": item["effective_date"],
+                "announcement_title": entry["title"],
+                "evidence": item["evidence"],
+                "page_url": entry["url"],
+                "needs_review": review_flag,
+            })
+            parsed[0] += 1
+        logger.info("  + [%s] %s: %s 条", entry["exchange"], aid, len(items))
+
+    async def _round1():
         retry_executor = ThreadPoolExecutor(max_workers=semaphore * 2)
         conn = aiohttp.TCPConnector(
             limit=semaphore * 2, limit_per_host=semaphore,
@@ -209,39 +260,43 @@ def main():
             family=socket.AF_INET,
         )
         async with aiohttp.ClientSession(connector=conn, trust_env=False) as session:
-            # 首轮解析
             tasks = [
                 process_one(aid, entry, session, retry_executor)
                 for aid, entry in candidates
             ]
             await asyncio.gather(*tasks, return_exceptions=True)
-            logger.info("首轮完成: +%s 条, 跳过 %s 条, 失败 %s 条", parsed[0], skipped[0], len(failed))
-
-            # 指数退避重试 (最多3轮: 1s, 2s, 4s)
-            for retry_i in range(3):
-                if not failed:
-                    break
-                delay = 2 ** retry_i
-                logger.warning("=" * 50)
-                logger.warning(
-                    "第 %s 轮重试: %s 条, 等待 %ss...", retry_i + 1, len(failed), delay
-                )
-                logger.warning("=" * 50)
-                await asyncio.sleep(delay)
-
-                retry_ids = set(failed)
-                failed.clear()
-                retry_candidates = [
-                    (aid, entry) for aid, entry in candidates if aid in retry_ids
-                ]
-                tasks = [process_one(aid, entry, session, retry_executor)
-                         for aid, entry in retry_candidates]
-                await asyncio.gather(*tasks, return_exceptions=True)
-
-                logger.info("第 %s 轮重试完成: 仍失败 %s 条", retry_i + 1, len(failed))
         retry_executor.shutdown(wait=False)
 
-    asyncio.run(_main())
+    # Step 1: 异步并发首轮
+    asyncio.run(_round1())
+    logger.info("首轮完成: +%s 条, 跳过 %s 条, 失败 %s 条", parsed[0], skipped[0], len(failed))
+
+    # Step 2: 同步串行重试（在协程外）
+    for retry_i in range(3):
+        if not failed:
+            break
+        logger.warning("=" * 50)
+        logger.warning(
+            "第 %s 轮重试: %s 条, 等待 10s...", retry_i + 1, len(failed),
+        )
+        logger.warning("=" * 50)
+        time.sleep(10)
+
+        retry_ids = list(failed)
+        failed.clear()
+        for aid in retry_ids:
+            time.sleep(10)  # 每个失败任务之间间隔 10s
+            entry = candidates_map[aid]
+            try:
+                _retry_one_sync(aid, entry)
+                logger.info("  重试成功 [%s] %s", entry["exchange"], aid)
+            except BaseException as e:
+                logger.warning(
+                    "重试失败 [%s] %s: %s", entry["exchange"], aid, e, exc_info=True,
+                )
+                failed.append(aid)
+
+        logger.info("第 %s 轮重试完成: 仍失败 %s 条", retry_i + 1, len(failed))
 
     logger.info(
         "解析完成: +%s 条 (跳过 %s 条无信息)", parsed[0], skipped[0],
