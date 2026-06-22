@@ -1045,7 +1045,7 @@ def merge_by_code_date(records: list[dict], date_str: str) -> list[dict]:
 # ══════════════════════════════════════════════════════
 
 _llm_logger = get_logger(
-    name="AnalyseAnnouncementsService",
+    name="data_sources.parser",
     level="DEBUG",
     dirpath_logs=str(Path(os.environ["LOG_DIR"])),
     logfile_basename="AnalyseAnnouncementsService",
