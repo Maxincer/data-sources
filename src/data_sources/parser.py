@@ -17,6 +17,7 @@ import json
 import os
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import aiohttp
@@ -1158,6 +1159,7 @@ _BROWSER_HEADERS = {
 _PW_EXCHANGES = {"GFEX", "SHFE", "INE", "CFFEX"}
 _PW_BROWSER: tuple | None = None
 _PW_LOCK = threading.Lock()
+_PW_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pw")
 
 
 def _get_pw_browser():
@@ -1222,7 +1224,7 @@ async def _download(
     if exchange in _PW_EXCHANGES:
         try:
             loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(None, _pw_download, url, local)
+            return await loop.run_in_executor(_PW_EXECUTOR, _pw_download, url, local)
         except Exception:
             pass
 
