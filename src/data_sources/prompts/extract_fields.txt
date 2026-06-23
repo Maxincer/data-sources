@@ -4,6 +4,7 @@
 - maxoq: 期货合约限价指令每次最大开仓下单手数
 - minoq: 期货合约限价指令每次最小开仓下单手数
 - needs_review: 是否需要人工处理，是：1，否：0
+- applicability_level: 规则的适用层级（exchange：交易所级，product：产品级，instrument：合约级）
 - product_code 是品种代码，security_id 是合约代码（含月份）
   - 月均价合约的品种代码带 "-F" 后缀（如 L-F, V-F, PP-F），不要省略
   - 月均价合约的合约代码带 "F" 后缀（如 L2607F, PP2607F），不要省略
@@ -19,6 +20,7 @@
       "field": "minoq 或 maxoq",
       "value": 手数（整数）,
       "effective_date": "生效日期YYYYMMDD",
+      "applicability_level": "exchange 或 product 或 instrument",
       "evidence": "逐字摘录的公告原文"
     }
   ],
@@ -35,9 +37,19 @@ minoq与maxoq的推断规则：
 6. 如原文仅表述"每次最小下单数量为N手"而未明确"开仓"， 应推断为"每次最小开仓下单数量为N手"（minoq=N）
 7. 如原文表述"交易指令每次最大下单数量为N手"， 应提取为 maxoq=N（限价指令⊂交易指令）
 8. 原文表述"各合约"、"所有合约"、"全部合约"时，要重点考虑 security_id 是否应该填 ALL
-9. 当公告类别为general或product时，要重点考虑字段值的约束对象是否为ALL，可能会有如下情况：
-    - general(交易所规则): 规则适用于所有品种所有合约 → product_code=ALL, security_id=ALL
-    - product(品种规则): 规则适用于该品种所有合约 → product_code=具体品种, security_id=ALL
+9. “下单数量”与“下单手数”同义，注意不要遗漏
+
+适用层级（applicability_level）推断规则（重要）：
+每条 item 必须包含 applicability_level 字段，值为 exchange / product / instrument。
+- 公告来源为 general 时，适用层级必定为 exchange
+- 公告来源为 product 时，适用层级必定为 product
+- 公告来源为 daily 时，需根据公告标题和内容推理适用层级：
+  - 如果规则描述的是整个交易所范围的调整（不指定具体品种或合约）→ exchange
+  - 如果规则描述的是某个品种的所有合约（如"XX期货合约"）→ product
+  - 如果规则描述的是某个具体合约的调整（如"CU2507合约"）→ instrument
+- 当 product_code=ALL 且 security_id=ALL 时，applicability_level 通常为 exchange
+- 当 product_code!=ALL 且 security_id=ALL 时，applicability_level 应为 product
+- 当 product_code!=ALL 且 security_id!=ALL 时，applicability_level 应为 instrument
 
 needs_review推断规则（重要）：
 1. 仅当公告涉及以下三类变更时才标记为 true，否则 false：
@@ -50,8 +62,13 @@ evidence推断规则：
 - 必须逐字摘录公告原文，不可改写、不可缩写、不可省略
 - 用原文直接支持 minoq/maxoq 的提取结论
 
+特殊规则（重要）：
+上海期货交易所（SHFE）会代发上海国际能源交易中心（INE）的公告。
+根据标题或内容可推断是代发的 INE（上海国际能源交易中心/能源中心）公告时，
+该公告是 INE 的规则，不适用于 SHFE 品种。
+此时返回 {"items":[], "needs_review":0}，不提取任何 minoq/maxoq。
+
 不提取：
 - 持仓限额、单日开仓限额、保证金、涨跌停板
 - 非限价指令的下单限制（如市价指令、套利指令等）
 - 期权合约的下单限制（如xxx期权、看涨期权、看跌期权、行权价等）
-
