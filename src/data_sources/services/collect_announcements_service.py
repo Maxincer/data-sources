@@ -1820,19 +1820,6 @@ def _shfe_extract_daily(page) -> list[dict]:
     return articles
 
 
-SHFE_HISTORICAL_URL = (
-    "https://www.shfe.com.cn/regulation/exchangerules/historicalversion/"
-)
-
-# 需要从历史版本中采集的目标规则标题关键词
-_SHFE_HISTORICAL_TARGETS = [
-    "风险控制管理办法",
-    "异常交易行为管理办法",
-    "期权交易管理办法",
-    "交易管理办法",
-]
-
-
 _IN_KEYWORDS = ["上海国际能源交易中心", "能源中心"]
 
 
@@ -1897,7 +1884,18 @@ def _collect_shfe_historical(ctx, meta: dict):
 
             try:
                 _goto_with_retry(page, a["url"], timeout=30000)
-                time.sleep(1)
+                # WAF JS challenge: 等待页面重载完成
+                for _ in range(3):
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=30000)
+                    except Exception:
+                        pass
+                    time.sleep(1)
+                    html = page.content()
+                    if "safeline_bot_challenge" in html or "当前正在对访问请求进行人机识别" in html:
+                        time.sleep(2)
+                        continue
+                    break
                 html = page.content()
                 if len(html) <= 500:
                     logger.warning("[SHFE] 历史版本内容过短: %s %s", aid, a["title"])

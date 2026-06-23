@@ -70,18 +70,23 @@ cp -rn /tmp/data-sources/deploy/offline/playwright/chromium-1208 /home/data_ops/
 cp -rn /tmp/data-sources/deploy/offline/playwright/chromium_headless_shell-1208 /home/data_ops/playwright-browsers/
 ```
 
-### 2.5 安装 Python 依赖
+### 2.5 更新部署：catdoc（老版 .doc 附件解析）
 
-> 每次更新都需执行。新增依赖：`aiohttp`、`pymupdf`、`openpyxl`、`tushare`。
-> **本次升级**：`mxz_utils` 从 `0.1.0` 升级到 `0.1.1`（已含在 pip-deps 中）。
+> 仅首次部署执行。用于解析 INE 历史公告中的老格式 .doc 附件。
 
 ```bash
-pip3 install --user --no-index --find-links=/tmp/data-sources/deploy/offline/pip-deps aiohttp pymupdf openpyxl tushare
-
-pip3 install --user --no-index --upgrade mxz_utils data_sources --find-links=/tmp/data-sources/deploy/offline/pip-deps
+sudo dpkg -i /tmp/data-sources/deploy/offline/sys-libs/catdoc_0.95-5_amd64.deb
 ```
 
-### 2.6 首次部署：配置 rutask
+### 2.6 更新部署：安装 Python 依赖
+
+> 每次更新都需执行。pip 会自动从 `pip-deps/` 解析所有传递依赖。
+
+```bash
+pip3 install --user --no-index --upgrade --find-links=/tmp/data-sources/deploy/offline/pip-deps mxz_utils data_sources
+```
+
+### 2.7 首次部署：配置 rutask
 
 > 仅首次部署执行。后续更新无需修改。
 
@@ -105,7 +110,7 @@ curl http://192.168.1.201:8877/reload
 rustask --sock cmd-rustask.sock reload
 ```
 
-### 2.7 清理
+### 2.8 清理
 
 ```bash
 rm -rf /tmp/data-sources /tmp/${RELEASE}.tar.gz

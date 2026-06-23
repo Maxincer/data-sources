@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import csv
-import json
 import os
 from pathlib import Path
 import re
@@ -84,7 +83,7 @@ class OrderLimitBook:
         self._rules: dict[str, list[tuple]] = {lv: [] for lv in self.LEVELS}
         self._loaded = False
 
-    def load(self, csv_path, meta_path=None):
+    def load(self, csv_path):
         if self._loaded:
             return
 
@@ -206,8 +205,7 @@ def _get_book() -> OrderLimitBook:
         _book = OrderLimitBook()
         data_dir = Path(os.environ["DATA_DIR"])
         csv_path = data_dir / "fields_from_announcements.csv"
-        meta_path = data_dir / "raw" / "announcements" / "announcements_metadata.json"
-        _book.load(csv_path, meta_path)
+        _book.load(csv_path)
     return _book
 
 

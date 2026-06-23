@@ -1454,6 +1454,24 @@ def _docx_to_text(path: Path) -> str:
         return ""
 
 
+def _doc_to_text(path: Path) -> str:
+    """提取老 .doc (OLE2) 文件的中文文本（尽力而为，中文需 catdoc）。
+    
+    优先尝试 catdoc 命令行工具，fallback 到 olefile GBK 解析。
+    """
+    import subprocess
+    try:
+        r = subprocess.run(["catdoc", "-w", str(path)], capture_output=True, timeout=30)
+        if r.returncode == 0 and r.stdout:
+            text = r.stdout.decode("utf-8", errors="replace")
+            _llm_logger.debug("catdoc 解析成功: %s (%s chars)", path.name, len(text))
+            return text
+    except Exception:
+        pass
+    _llm_logger.debug("catdoc 解析失败: %s", path.name)
+    return ""
+
+
 def _process_html(html, page_url=""):
     """同步 HTML 预处理:提取正文 + 附件链接。放 executor 执行。"""
     soup = BeautifulSoup(html, "html.parser")
@@ -1540,7 +1558,8 @@ async def parse_announcement_fields(
                     )
                     try:
                         t = (_pdf_to_text(local) if link["ext"] in (".pdf",)
-                             else _docx_to_text(local) if link["ext"] in (".docx", ".doc")
+                             else _docx_to_text(local) if link["ext"] == ".docx"
+                             else _doc_to_text(local) if link["ext"] == ".doc"
                              else _xlsx_to_text(local))
                         atext += f"\n[附件:{local.name}]\n{t}\n"
                     except Exception as parse_err:
@@ -1567,12 +1586,14 @@ async def parse_announcement_fields(
                 link_index=link_index,
             )
             try:
-                t = (_pdf_to_text(local) if link["ext"] == ".pdf"
+                t = (_pdf_to_text(local) if link["ext"] in (".pdf",)
                          else _docx_to_text(local) if link["ext"] == ".docx"
+                         else _doc_to_text(local) if link["ext"] == ".doc"
                          else _xlsx_to_text(local))
                 atext += f"\n[附件:{local.name}]\n{t}\n"
-            except Exception:
-                _llm_logger.debug("附件解析失败: %s", local.name)
+            except Exception as parse_err:
+                _llm_logger.warning("附件解析失败, 任务取消: %s %s", local.name, parse_err)
+                raise
 
     full_text = text + atext
 
@@ -1692,7 +1713,8 @@ def _parse_fields_sync(
                     _llm_logger.info("附件命中缓存: %s (%s bytes)", local.resolve(), local.stat().st_size)
                     try:
                         t = (_pdf_to_text(local) if link["ext"] in (".pdf",)
-                             else _docx_to_text(local) if link["ext"] in (".docx", ".doc")
+                             else _docx_to_text(local) if link["ext"] == ".docx"
+                             else _doc_to_text(local) if link["ext"] == ".doc"
                              else _xlsx_to_text(local))
                         atext += f"\n[附件:{local.name}]\n{t}\n"
                     except Exception as parse_err:
@@ -1725,12 +1747,14 @@ def _parse_fields_sync(
                 link_index=link_index,
             )
             try:
-                t = (_pdf_to_text(local) if link["ext"] == ".pdf"
+                t = (_pdf_to_text(local) if link["ext"] in (".pdf",)
                      else _docx_to_text(local) if link["ext"] == ".docx"
+                     else _doc_to_text(local) if link["ext"] == ".doc"
                      else _xlsx_to_text(local))
                 atext += f"\n[附件:{local.name}]\n{t}\n"
-            except Exception:
-                _llm_logger.debug("附件解析失败: %s", local.name)
+            except Exception as parse_err:
+                _llm_logger.warning("附件解析失败, 任务取消: %s %s", local.name, parse_err)
+                raise
 
     full_text = text + atext
 
