@@ -69,34 +69,24 @@ def security_id_to_product_code(security_id: str) -> str:
 
 
 class OrderLimitBook:
-    """从 fields_from_announcements.csv + announcements_metadata.json 构建.
+    """从 fields_from_announcements.csv 构建, 按适用层级分级.
 
-    三级规则:
-      daily   (日常公告调整)  — 最高优先级
-      product (品种业务细则)
-      general (交易所规则)    — 最低优先级
+    三级规则 (优先级由高到低):
+      instrument (合约级调整) — 最高优先级
+      product    (品种细则)
+      exchange   (交易所规则)  — 最低优先级
     """
 
-    LEVELS = ("daily", "product", "general")
+    LEVELS = ("instrument", "product", "exchange")
 
     def __init__(self):
         # rules[level]: [(sort_key, exchange, product_code, security_id, field, value), ...]
         self._rules: dict[str, list[tuple]] = {lv: [] for lv in self.LEVELS}
         self._loaded = False
 
-    def load(self, csv_path, meta_path):
+    def load(self, csv_path, meta_path=None):
         if self._loaded:
             return
-
-        # 加载 metadata: aid → category
-        aid_cat: dict[str, str] = {}
-        if meta_path.exists():
-            with open(meta_path, encoding="utf-8") as f:
-                meta = json.load(f)
-            for aid, entry in meta.items():
-                cat = entry.get("category", "").strip().lower()
-                if cat in self.LEVELS:
-                    aid_cat[aid] = cat
 
         if csv_path.exists():
             with open(csv_path, encoding="utf-8") as f:
@@ -108,16 +98,17 @@ class OrderLimitBook:
                     val = row.get("value", "").strip()
                     sid = row.get("security_id", "").strip()
                     eff = row.get("effective_date", "").strip()
-                    aid = row.get("announcement_id", "").strip()
+                    level = row.get("applicability_level", "").strip()
                     if not ex or not pc or field not in ("minoq", "maxoq") or not val:
+                        continue
+                    if level not in self.LEVELS:
                         continue
                     try:
                         val = int(val)
                     except ValueError:
                         continue
                     sort_key = _parse_eff_date_sort(eff)
-                    cat = aid_cat.get(aid, "daily")  # 默认 daily (最保守)
-                    self._rules[cat].append(
+                    self._rules[level].append(
                         (sort_key, ex, pc, sid, field, val)
                     )
         else:
@@ -129,10 +120,10 @@ class OrderLimitBook:
 
         self._loaded = True
         logger.info(
-            "OrderLimitBook: 加载 daily=%s product=%s general=%s",
-            len(self._rules["daily"]),
+            "OrderLimitBook: 加载 instrument=%s product=%s exchange=%s",
+            len(self._rules["instrument"]),
             len(self._rules["product"]),
-            len(self._rules["general"]),
+            len(self._rules["exchange"]),
         )
 
     def _best_for_level(self, level: str, exchange: str,

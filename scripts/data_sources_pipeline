@@ -90,7 +90,7 @@ fi
 export DAILY_START_DATE="${DAILY_START_DATE:-20251201}"
 export DCE_API_KEY="${DCE_API_KEY:-ofxc69rpmd59}"
 export DCE_API_SECRET="${DCE_API_SECRET:-2UdFW^2G4!4^7#@URqWx}"
-export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-sk-9bf4150a6cfe435a8ae66da744b17487}"
+export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-sk-83aae83e08084eb994ebccab778a5654}"
 export ZHIPU_API_KEY="${ZHIPU_API_KEY:-f2f4fa94c73c4721ab3d7223548f49eb.e460UuOGcDGIuP6C}"
 export ZHIPU_BASE_URL="${ZHIPU_BASE_URL:-https://open.bigmodel.cn/api/paas/v4/chat/completions}"
 export ZHIPU_VISION_MODEL="${ZHIPU_VISION_MODEL:-glm-4v-flash}"

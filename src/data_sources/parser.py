@@ -1104,7 +1104,7 @@ def clean_attachment_orphans(meta: dict[str, dict]):
     - 文件存在但 metadata 无记录 → 删文件
     - metadata 标 downloaded 但文件不存在 → 标 failed to download
     """
-    raw_dir = DATA_DIR / "raw" / "announcements" / "exchanges"
+    raw_dir = DATA_DIR / "raw" / "announcements"
     if not raw_dir.exists():
         return
 
@@ -1170,7 +1170,7 @@ def _extract_links(html, page_url):
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
         ext = Path(href).suffix.lower()
-        if ext in (".pdf", ".xls", ".xlsx", ".docx"):
+        if ext in (".pdf", ".xls", ".xlsx", ".docx", ".doc"):
             abs_url = urljoin(page_url, href)
             # 从 URL 提取纯数字/字母 ID(去除中文和路径分隔符)
             raw_name = unquote(abs_url.split("/")[-1].split("?")[0])
@@ -1288,6 +1288,10 @@ async def _pw_download_async(url: str, local_path: Path) -> Path:
             if not resp.ok:
                 raise RuntimeError(f"HTTP {resp.status}")
             body = await resp.body()
+
+            # WAF 检测
+            if len(body) < 5000 or b"EO_Bot_Ssid" in body:
+                raise RuntimeError(f"WAF/bot challenge ({len(body)} bytes)")
 
             local_path.parent.mkdir(parents=True, exist_ok=True)
             local_path.write_bytes(body)
@@ -1535,8 +1539,8 @@ async def parse_announcement_fields(
                         local.resolve(), local.stat().st_size,
                     )
                     try:
-                        t = (_pdf_to_text(local) if link["ext"] == ".pdf"
-                             else _docx_to_text(local) if link["ext"] == ".docx"
+                        t = (_pdf_to_text(local) if link["ext"] in (".pdf",)
+                             else _docx_to_text(local) if link["ext"] in (".docx", ".doc")
                              else _xlsx_to_text(local))
                         atext += f"\n[附件:{local.name}]\n{t}\n"
                     except Exception as parse_err:
@@ -1655,6 +1659,7 @@ async def parse_announcement_fields(
             "value": int(val),
             "effective_date": eff_date,
             "evidence": str(evidence),
+            "applicability_level": item["applicability_level"],
         })
     return results, needs_review
 
@@ -1686,8 +1691,8 @@ def _parse_fields_sync(
                     local = cached_path
                     _llm_logger.info("附件命中缓存: %s (%s bytes)", local.resolve(), local.stat().st_size)
                     try:
-                        t = (_pdf_to_text(local) if link["ext"] == ".pdf"
-                             else _docx_to_text(local) if link["ext"] == ".docx"
+                        t = (_pdf_to_text(local) if link["ext"] in (".pdf",)
+                             else _docx_to_text(local) if link["ext"] in (".docx", ".doc")
                              else _xlsx_to_text(local))
                         atext += f"\n[附件:{local.name}]\n{t}\n"
                     except Exception as parse_err:
@@ -1797,6 +1802,7 @@ def _parse_fields_sync(
             "value": int(val),
             "effective_date": eff_date,
             "evidence": str(evidence),
+            "applicability_level": item["applicability_level"],
         })
     return results, needs_review
 

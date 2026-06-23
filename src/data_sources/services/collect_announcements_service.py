@@ -78,7 +78,7 @@ logger = get_logger(
 EXCHANGE_CATEGORIES = {"general", "product", "daily"}
 
 def _exchange_dir(exchange: str) -> Path:
-    return DATA_DIR / "raw" / "announcements" / "exchanges" / exchange
+    return DATA_DIR / "raw" / "announcements" / exchange
 
 # ── CFFEX ────────────────────────────────────────────
 CFFEX_BASE = _exchange_dir("CFFEX")
@@ -1585,6 +1585,56 @@ def collect_ine():
                              if _ine_article_id(a["url"]) in meta),
                          len(new))
 
+        # ── 历史版本补充 ──
+        _INE_HISTORICAL_EXTRA = [
+            {
+                "title": "关于发布《上海国际能源交易中心章程》、《上海国际能源交易中心交易规则》以及相关业务细则的公告",
+                "url": "https://www.ine.cn/publicnotice/notice/201705/t20170511_811050.html",
+                "pub_date": "20170511",
+                "category": "general",
+            },
+        ]
+        for a in _INE_HISTORICAL_EXTRA:
+            aid = _ine_article_id(a["url"])
+            if aid in meta:
+                logger.debug("[INE] 历史版本已存在: %s", aid)
+                continue
+            cat = a["category"]
+            pd = a["pub_date"]
+            url = a["url"]
+            m = re.search(r"(\d+)\.html$", url)
+            url_id = m.group(1) if m else aid[-8:]
+            fname = f"INE_{pd}_{url_id}.html"
+            fp = INE_BASE / cat / fname
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                _goto_with_retry(page, url)
+                time.sleep(1)
+                html = page.content()
+                if len(html) <= 500:
+                    logger.warning("[INE] 历史版本内容过短: %s %s", aid, a["title"])
+                    continue
+                fail_reason = _check_download(html, "INE", aid, a["title"], a["url"])
+                if fail_reason:
+                    logger.warning("[INE] 历史版本检查失败: %s %s", aid, fail_reason)
+                    continue
+                _locked_write_html(fp, html)
+                upsert_record(aid, {
+                    "id": aid,
+                    "url": url,
+                    "title": a["title"],
+                    "exchange": "INE",
+                    "category": cat,
+                    "pub_date": pd,
+                    "source_file": str(fp),
+                    "status": "downloaded",
+                    "downloaded_at": _now_str(),
+                })
+                meta[aid] = True
+                logger.info("  ✓ [history] %s | %s", aid, a["title"][:50])
+            except Exception as e:
+                logger.warning("[INE] 历史版本下载失败 %s: %s", a["title"], e)
+
         # ── 公告通知 ──
         logger.info("[INE] 采集公告通知 (≥ %s)", DAILY_START_DATE)
         daily = _ine_extract_daily(page)
@@ -1795,60 +1845,42 @@ def _resolve_exchange(title: str) -> str:
 
 
 def _collect_shfe_historical(ctx, meta: dict):
-    """从 SHFE 历史版本页采集指定规则的最新版本。
+    """从 SHFE 历史版本页采集指定规则的历史版本。
 
-    部分规则公告（如风险控制管理办法）的原始版本含正确的 effective_date，
-    而后续重申公告可能仅确认规则不变，无新生效日期。
-    通过采集历史版本页获取原始规则文档，补充 effective_date 上下文。
+    部分规则公告的原始版本含正确的 effective_date / minoq / maxoq，
+    而后续最新版本可能仅确认规则延续，无 minoq/maxoq 描述。
+    通过采集历史版本公告补充已丢失的下单量描述。
     """
+    # 硬编码历史版本 URL（历史版本页面结构变化频繁，直接指定更可靠）
+    targets = [
+        {
+            "title": "上海期货交易所风险控制管理办法",
+            "url": "https://www.shfe.com.cn/regulation/exchangerules/historicalversion/202508/t20250807_828524.html",
+            "pub_date": "20250807",
+            "category": "general",
+        },
+        {
+            "title": "上海期货交易所交易管理办法",
+            "url": "https://www.shfe.com.cn/regulation/exchangerules/historicalversion/202409/t20240903_802235.html",
+            "pub_date": "20240903",
+            "category": "general",
+        },
+        {
+            "title": "上海期货交易所异常交易行为管理办法",
+            "url": "https://www.shfe.com.cn/regulation/exchangerules/historicalversion/202409/t20240903_802259.html",
+            "pub_date": "20240903",
+            "category": "general",
+        },
+        {
+            "title": "上海期货交易所期权交易管理办法",
+            "url": "https://www.shfe.com.cn/regulation/exchangerules/historicalversion/202409/t20240903_802257.html",
+            "pub_date": "20240903",
+            "category": "general",
+        },
+    ]
+
     page = ctx.new_page()
     try:
-        _goto_with_retry(page, SHFE_HISTORICAL_URL, timeout=60000)
-        time.sleep(3)
-
-        # 处理 WAF JS challenge: 等待页面真正加载完成
-        for _ in range(3):
-            try:
-                page.wait_for_load_state("networkidle", timeout=30000)
-            except Exception:
-                pass
-            time.sleep(1)
-            html = page.content()
-            # 如果页面仍有 WAF 标记, 继续等待
-            if "safeline_bot_challenge" in html or "当前正在对访问请求进行人机识别" in html:
-                time.sleep(2)
-                continue
-            break
-
-        # 提取所有规则链接
-        links = re.findall(
-            r'<a[^>]*href="([^"]+)"[^>]*>([^<]+)</a>',
-            page.content(),
-        )
-
-        targets = []
-        matched_keywords = set()
-        for href, title in links:
-            title = title.strip()
-            if not title:
-                continue
-            for kw in _SHFE_HISTORICAL_TARGETS:
-                if kw in title and kw not in matched_keywords:
-                    matched_keywords.add(kw)
-                    if href.startswith("/"):
-                        full_url = f"https://www.shfe.com.cn{href}"
-                    elif href.startswith("./"):
-                        full_url = SHFE_HISTORICAL_URL + href[2:]
-                    else:
-                        full_url = SHFE_HISTORICAL_URL + href
-                    targets.append({"title": title, "url": full_url})
-                    logger.info("[SHFE] 历史版本匹配: %s -> %s", title, full_url)
-                    break
-
-        if not targets:
-            logger.warning("[SHFE] 历史版本: 未找到目标规则")
-            return
-
         # 下载匹配的规则
         for a in targets:
             aid = _shfe_article_id(a["url"])

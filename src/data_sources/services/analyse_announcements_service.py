@@ -48,7 +48,7 @@ logger = get_logger(
 HEADER = [
     "announcement_id", "publish_date", "exchange",
     "product_code", "security_id", "field", "value",
-    "effective_date", "announcement_title", "evidence", "page_url",
+    "effective_date", "applicability_level", "announcement_title", "evidence", "page_url",
     "needs_review",
 ]
 
@@ -167,6 +167,7 @@ def main():
                             "field": "",
                             "value": "",
                             "effective_date": "",
+                            "applicability_level": "",
                             "announcement_title": entry["title"],
                             "evidence": "",
                             "page_url": entry["url"],
@@ -187,6 +188,7 @@ def main():
                             "field": item["field"],
                             "value": str(item["value"]),
                             "effective_date": item["effective_date"],
+                            "applicability_level": item.get("applicability_level", ""),
                             "announcement_title": entry["title"],
                             "evidence": item["evidence"],
                             "page_url": entry["url"],
@@ -227,6 +229,7 @@ def main():
                 "field": "",
                 "value": "",
                 "effective_date": "",
+                "applicability_level": "",
                 "announcement_title": entry["title"],
                 "evidence": "",
                 "page_url": entry["url"],
@@ -244,6 +247,7 @@ def main():
                 "field": item["field"],
                 "value": str(item["value"]),
                 "effective_date": item["effective_date"],
+                "applicability_level": item.get("applicability_level", ""),
                 "announcement_title": entry["title"],
                 "evidence": item["evidence"],
                 "page_url": entry["url"],

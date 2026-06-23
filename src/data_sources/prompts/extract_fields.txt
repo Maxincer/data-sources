@@ -37,7 +37,7 @@ minoq与maxoq的推断规则：
 6. 如原文仅表述"每次最小下单数量为N手"而未明确"开仓"， 应推断为"每次最小开仓下单数量为N手"（minoq=N）
 7. 如原文表述"交易指令每次最大下单数量为N手"， 应提取为 maxoq=N（限价指令⊂交易指令）
 8. 原文表述"各合约"、"所有合约"、"全部合约"时，要重点考虑 security_id 是否应该填 ALL
-9. “下单数量”与“下单手数”同义，注意不要遗漏
+9. “下单数量”、“下单量”与“下单手数”同义，注意不要遗漏
 
 适用层级（applicability_level）推断规则（重要）：
 每条 item 必须包含 applicability_level 字段，值为 exchange / product / instrument。
