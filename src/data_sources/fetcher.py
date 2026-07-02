@@ -1061,6 +1061,15 @@ class Fetcher:
         Path(os.environ["DATA_DIR"]) / "raw" / "product_configs"
     )
 
+    @staticmethod
+    def _is_waf_blocked(html: str) -> bool:
+        """检测页面是否为 WAF 挑战页或空内容。"""
+        return (
+            "人机识别" in html
+            or "__SFLBCC__" in html
+            or len(html) < 5000
+        )
+
     def _fetch_exchange_product_config(self, task: Task) -> dict:
         """Download SHFE/INE product specification HTMLs via Playwright.
 
@@ -1099,12 +1108,12 @@ class Fetcher:
                 page.wait_for_timeout(8000)
                 html = page.content()
 
-                if "人机识别" in html:
+                if self._is_waf_blocked(html):
                     page.wait_for_timeout(8000)
                     html = page.content()
-                if "人机识别" in html:
+                if self._is_waf_blocked(html):
                     self.logger.error("BLOCKED by WAF: %s", listing_url)
-                    return {"success": False, "error": "WAF blocked"}
+                    return {"success": False, "error": "WAF blocked or empty content"}
 
                 soup = BeautifulSoup(html, "html.parser")
                 seen = set()
@@ -1123,6 +1132,7 @@ class Fetcher:
 
                 # ── Step 2: 逐个下载产品页面 ──
                 success_count = 0
+                failed_products = []
                 for i, prod in enumerate(products):
                     code = prod["code"]
                     save_name = (
@@ -1147,11 +1157,12 @@ class Fetcher:
                     page.wait_for_timeout(6000)
 
                     page_html = page.content()
-                    if "人机识别" in page_html:
+                    if self._is_waf_blocked(page_html):
                         page.wait_for_timeout(6000)
                         page_html = page.content()
-                    if "人机识别" in page_html:
-                        self.logger.warning("    ✗ %s (WAF blocked)", code)
+                    if self._is_waf_blocked(page_html):
+                        self.logger.warning("    ✗ %s (WAF blocked / empty)", code)
+                        failed_products.append(code)
                         continue
 
                     save_path.write_text(page_html, encoding="utf-8")
@@ -1176,6 +1187,11 @@ class Fetcher:
         "%s product config: %d/%d saved",
         task.exchange, success_count, len(products),
     )
+        if failed_products:
+            return {
+                "success": False,
+                "error": f"WAF blocked or empty for: {', '.join(failed_products)}",
+            }
         return {"success": True}
 
     def _fetch_shfe_product_config(self, task: Task) -> dict:
