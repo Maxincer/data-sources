@@ -135,3 +135,44 @@ for item in data['data']:
 # 查看 Writer 日志中的无前日警告
 grep "无前日" logs/Writer.*.log | tail -10
 ```
+
+---
+
+## 5. Writer "无前日保证金数据" 告警
+
+### 现象
+Writer 日志中出现以下 warning：
+
+```
+.CZC ZC2607.CZC 无前日保证金数据，long_margin/short_margin 置空
+.CZC ZC2707.CZC 无前日保证金数据，long_margin/short_margin 置空
+```
+
+### 根因
+writer 只加载当日和前一日的原始数据文件，`_fix_margin_inherit` 按合约代码分组后检查记录数，只有 1 条记录时无前日可继承，将 margin 置 NULL 并告警。
+
+两种场景触发：
+
+| 场景 | 合约 | 原因 | 最终影响 |
+|------|------|------|---------|
+| **已到期合约** | ZC2607.CZC（ZC607） | 今日已摘牌，仅前日文件有数据 | margin 置 NULL → 日期过滤后排除，**最终表不包含** |
+| **新上市合约** | ZC2707.CZC（ZC707） | 今日首次出现，无前日记录 | margin 置 NULL → **写入表时 margin 为空** |
+
+### 判断标准
+- 已到期合约：`date_str` 文件中不存在该合约，`prev_date` 文件中存在
+- 新上市合约：`date_str` 文件中首次出现，`prev_date` 文件中不存在
+
+### 处理方案
+**无需处理，属于正常行为。**
+1. `_fix_margin_inherit` 检测到只有 1 天数据 → 置空并告警
+2. 已到期合约被 `target_records` 过滤，不会写入数据库
+3. 新上市合约的 margin 会在第二个交易日自动恢复（届时有两日数据可继承）
+
+### 排查方法
+```bash
+# 查看原始数据中合约的存在性
+grep "^ZC607\|^ZC707" data/raw/structured/${date_str}.CZCE.*.txt
+
+# 查看 Writer 日志中的无前日警告
+grep "无前日" logs/Writer.${date_str}.log
+```
