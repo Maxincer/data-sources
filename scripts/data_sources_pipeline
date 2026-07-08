@@ -124,7 +124,7 @@ echo "[$(date '+%F %T')] Step 4/5: Writing..."
 ${RUN_WRITER} 2>&1 || exit 1
 
 echo "[$(date '+%F %T')] Step 5/5: Reporting + email..."
-${RUN_REPORTER} --sender "${SENDER}" --recipients "${RECIPIENTS}" ${REPORTER_OPTS} 2>&1
+${RUN_REPORTER} --sender "${SENDER}" --recipients "${RECIPIENTS}" ${REPORTER_OPTS} 2>&1 || true
 
 STATUS=$?
 echo "reporter exit: $STATUS"
