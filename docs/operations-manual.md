@@ -76,3 +76,62 @@ SHFE_20240903_802266 | 丁二烯橡胶期货业务细则
 ### 未来改进方向
 - 在 Parse Service 中识别 404 条目后，可标记为 `status: dead` 写入 metadata，后续采集跳过
 - 或手动清理 metadata 中对应的 URL 来源记录（需确认该条目的来源 URL 后移除）
+
+---
+
+## 4. DCE 新上市合约无前日交易参数
+
+### 现象
+Writer 日志中出现以下 warning：
+
+```
+DCE BZ2706.DCE 无前日交易参数，涨跌停/保证金置空
+DCE EB2706.DCE 无前日交易参数，涨跌停/保证金置空
+DCE EG2706.DCE 无前日交易参数，涨跌停/保证金置空
+DCE JD2706.DCE 无前日交易参数，涨跌停/保证金置空
+DCE PG2706.DCE 无前日交易参数，涨跌停/保证金置空
+```
+
+对应数据验证报告中合约的 `open=—, close=—, settle=—` 标记。
+
+### 根因
+DCE 涨跌停价修正逻辑（`fix_dce_limit_prices`）使用**开盘限价口径**：需用前一交易日的 DCE API 原始值来替代当日值。当一个合约首次出现在 DCE 交易参数 API 中时（即只有 1 天数据），无法进行此替换，因此将 maxup/maxdown/margin 置空。
+
+### 判断标准
+新合约即将上市的典型特征：
+| 指标 | 正常合约 | 新上市合约 |
+|------|---------|-----------|
+| `selfTotBuyPosiQuota` | > 0 | **0.0** |
+| `riseLimitRate` | 6-9% | **12-14%**（首日涨跌停幅度） |
+| 历史天数 | ≥ 2 天 | **1 天**（首次出现） |
+
+### 发生场景
+DCE 现有品种（EB、EG、JD、PG 等）在远月合约进入合约链时，或新品种（如 BZ/纯苯）新增合约月时，会在 API 中预先注册该合约。该合约通常在**下一个交易日**正式挂盘上市。
+
+- 示例：2026-06-25 出现的 BZ2706/EB2706/EG2706/JD2706/PG2706 → **2026-06-26 上市**
+- 此后第二个交易日开始，前一日的交易参数会出现在 API 中，涨跌停/保证金恢复正常计算
+
+### 处理方案
+**无需处理，属于正常行为。** 代码逻辑是正确的：
+1. `fix_dce_limit_prices` 检测到只有 1 天数据 → 置空并告警（由 `modifier.py` 负责）
+2. 次日该合约有前日数据后，涨跌停/保证金自动恢复
+3. 数据验证报告中的 `—` 标记反映了真实的合约状态（上市首日无前收盘价）
+
+### 排查方法
+```bash
+# 检查 DCE 交易参数数据中的新合约特征
+python3 -c "
+import json
+with open('data/raw/structured/2026MMDD.DCE.TradingParameters.json') as f:
+    data = json.load(f)
+# 查找持仓限额为 0 的合约
+for item in data['data']:
+    if item.get('selfTotBuyPosiQuota', -1) == 0:
+        print(f\"新合约: {item['contractId']}, "
+              f\"涨跌停率: {item.get('riseLimitRate')}, "
+              f\"持仓限额: {item.get('selfTotBuyPosiQuota')}\")
+"
+
+# 查看 Writer 日志中的无前日警告
+grep "无前日" logs/Writer.*.log | tail -10
+```

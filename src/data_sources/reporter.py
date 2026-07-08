@@ -161,10 +161,18 @@ class Reporter:
 
         self.logger.info("Report for %s sent.", date_str)
 
-        # Rollback evaluation (phase 2: compare exchange vs WSS)
+        # Rollback evaluation
+        # 生产：用 WSS 对比；DEV（无 WSS）：用 table 对比
         reasons = []
-        if skip_table_compare and comparisons:
-            comp = comparisons[0][1]
+        if comparisons:
+            comp = None
+            for title, c in comparisons:
+                if "vs wss" in title:
+                    comp = c
+                    break
+            if comp is None:
+                # DEV 模式，退而取 table 对比
+                comp = comparisons[0][1]
             reasons = self._evaluate_rollback(comp)
 
         if reasons:
@@ -264,13 +272,16 @@ class Reporter:
         msg.attach(MIMEText("\n".join(html_parts), "html", "utf-8"))
 
         ctx = ssl.create_default_context()
-        with smtplib.SMTP_SSL(
-            os.environ["SMTP_HOST"],
-            int(os.environ["SMTP_PORT"]),
-            context=ctx) as server:
-            server.login(sender, password)
-            server.sendmail(sender, recipients, msg.as_string())
-        self.logger.info("邮件已发送至: %s", ", ".join(recipients))
+        try:
+            with smtplib.SMTP_SSL(
+                os.environ["SMTP_HOST"],
+                int(os.environ["SMTP_PORT"]),
+                context=ctx) as server:
+                server.login(sender, password)
+                server.sendmail(sender, recipients, msg.as_string())
+            self.logger.info("邮件已发送至: %s", ", ".join(recipients))
+        except Exception as exc:
+            self.logger.warning("邮件发送失败（不影响 pipeline）: %s", exc)
 
     @staticmethod
     def _send_feishu_markdown(title: str, content: str):

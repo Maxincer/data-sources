@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-#  Production:                 data-sources-pipeline [TRADE_DATE]
-#  Development:                DEV_MODE=1 bash scripts/data-sources-pipeline [TRADE_DATE]
+#  Development:                DEV_MODE=1 bash scripts/data-sources-pipeline
+#  Production:                 data-sources-pipeline
 
 set -euo pipefail
 
-TRADE_DATE="${1:-$(date +%Y%m%d)}"
+# TRADE_DATE="${1:-$(date +%Y%m%d)}"
+TRADE_DATE="20260707"
 
 WRITER_TABLE="t_futures_info_exchange"
 # WRITER_TABLE="t_futures_info"  # phase 2
@@ -80,11 +81,11 @@ else
 fi
 
 # ---- 时间门禁 ----
-CURRENT_HM=$(date +%H%M)
-if [ "$CURRENT_HM" -lt 1630 ]; then
-    echo "[$(date '+%F %T')] 当前 ${CURRENT_HM} < 1630，跳过 pipeline"
-    exit 0
-fi
+# CURRENT_HM=$(date +%H%M)
+# if [ "$CURRENT_HM" -lt 1630 ]; then
+#     echo "[$(date '+%F %T')] 当前 ${CURRENT_HM} < 1630，跳过 pipeline"
+#     exit 0
+# fi
 
 # ---- 密码与收件人（env var fallback，部署人员可通过 rutask env 覆写）----
 export DAILY_START_DATE="${DAILY_START_DATE:-20251201}"
@@ -111,13 +112,13 @@ export RECIPIENTS="${RECIPIENTS:-mxz@wendao.fund}"
 echo "[$(date '+%F %T')] ===== pipeline started for ${TRADE_DATE} ====="
 
 echo "[$(date '+%F %T')] Step 1/5: Collecting announcements..."
-${RUN_COLLECT} 2>&1 || exit 1
+#${RUN_COLLECT} 2>&1 || exit 1
 
 echo "[$(date '+%F %T')] Step 2/5: Analyzing announcements..."
-${RUN_ANALYSE} 2>&1 || exit 1
+#${RUN_ANALYSE} 2>&1 || exit 1
 
 echo "[$(date '+%F %T')] Step 3/5: Fetching..."
-${RUN_FETCHER} 2>&1 || exit 1
+#${RUN_FETCHER} 2>&1 || exit 1
 
 echo "[$(date '+%F %T')] Step 4/5: Writing..."
 ${RUN_WRITER} 2>&1 || exit 1
@@ -126,6 +127,7 @@ echo "[$(date '+%F %T')] Step 5/5: Reporting + email..."
 ${RUN_REPORTER} --sender "${SENDER}" --recipients "${RECIPIENTS}" ${REPORTER_OPTS} 2>&1
 
 STATUS=$?
+echo "reporter exit: $STATUS"
 if [ $STATUS -eq 2 ]; then
     # 回滚：删除当日写入数据
     echo "[$(date '+%F %T')] 🔄 ROLLBACK triggered"
