@@ -199,9 +199,8 @@ class Reporter:
 
         # 条件 a：exchange 为空、WSS 非空（TAS 已在 verifier 中豁免）
         for field, s in fs.items():
-            if s.get("missing_in_original", 0) > 0:
-                cnt = s['missing_in_original']
-                reasons.append(f"[a] {field}：{cnt} 条 exchange=空 WSS≠空")
+            if s.get("missing_a", 0) > 0:
+                reasons.append(f"[a] {field}：{s['missing_a']} 条 exchange=空 WSS≠空")
 
         # 条件 b1：行情字段精确不相等
         for f in ("open", "high", "low", "close", "settle", "maxup", "maxdown"):
