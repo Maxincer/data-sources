@@ -127,7 +127,7 @@ echo "[$(date '+%F %T')] Step 5/5: Reporting + email..."
 ${RUN_REPORTER} --sender "${SENDER}" --recipients "${RECIPIENTS}" ${REPORTER_OPTS} 2>&1 && rc=0 || rc=$?
 STATUS=$rc
 echo "reporter exit: $STATUS"
-if [ $STATUS -eq 2 ]; then
+if [ $STATUS -ne 0 ]; then
     # 回滚：删除当日写入数据
     echo "[$(date '+%F %T')] 🔄 ROLLBACK triggered"
     mysql -h "${DB_HOST}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_DATABASE}" \
