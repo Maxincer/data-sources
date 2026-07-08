@@ -114,13 +114,13 @@ export RECIPIENTS="${RECIPIENTS:-mxz@wendao.fund}"
 echo "[$(date '+%F %T')] ===== pipeline started for ${TRADE_DATE} ====="
 
 echo "[$(date '+%F %T')] Step 1/5: Collecting announcements..."
-#${RUN_COLLECT} 2>&1 || exit 1
+${RUN_COLLECT} 2>&1 || exit 1
 
 echo "[$(date '+%F %T')] Step 2/5: Analyzing announcements..."
-#${RUN_ANALYSE} 2>&1 || exit 1
+${RUN_ANALYSE} 2>&1 || exit 1
 
 echo "[$(date '+%F %T')] Step 3/5: Fetching..."
-#${RUN_FETCHER} 2>&1 || exit 1
+${RUN_FETCHER} 2>&1 || exit 1
 
 echo "[$(date '+%F %T')] Step 4/5: Writing..."
 ${RUN_WRITER} 2>&1 || exit 1
