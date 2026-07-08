@@ -1066,7 +1066,6 @@ class Fetcher:
         """检测页面是否为 WAF 挑战页或空内容。"""
         return (
             "人机识别" in html
-            or "__SFLBCC__" in html
             or len(html) < 5000
         )
 
