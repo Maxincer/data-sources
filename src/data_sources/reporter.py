@@ -7,6 +7,7 @@ import logging
 import os
 import smtplib
 import ssl
+import sys
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -159,6 +160,68 @@ class Reporter:
         )
 
         self.logger.info("Report for %s sent.", date_str)
+
+        # Rollback evaluation (phase 2: compare exchange vs WSS)
+        reasons = []
+        if skip_table_compare and comparisons:
+            comp = comparisons[0][1]
+            reasons = self._evaluate_rollback(comp)
+
+        if reasons:
+            self.logger.warning("ROLLBACK triggered: %s", "; ".join(reasons))
+            self._send_feishu_markdown(
+                f"🔄 回滚触发 {date_str}",
+                "回滚原因：\n" + "\n".join(reasons),
+            )
+
+        return {"rollback": bool(reasons), "reasons": reasons}
+
+    @staticmethod
+    def _evaluate_rollback(comp: dict) -> list[str]:
+        """根据 exchange vs WSS 比对结果判定是否触发回滚。
+
+        Args:
+            comp: Verifier.compare_all() 返回值
+
+        Returns:
+            空列表=验收通过，非空=回滚原因列表
+        """
+        reasons = []
+        fs = comp.get("field_summary", {})
+
+        # 条件 a：exchange 为空、WSS 非空（TAS 已在 verifier 中豁免）
+        for field, s in fs.items():
+            if s.get("missing_in_original", 0) > 0:
+                cnt = s['missing_in_original']
+                reasons.append(f"[a] {field}：{cnt} 条 exchange=空 WSS≠空")
+
+        # 条件 b1：行情字段精确不相等
+        for f in ("open", "high", "low", "close", "settle", "maxup", "maxdown"):
+            if fs.get(f, {}).get("diff", 0) > 0:
+                reasons.append(f"[b1] {f}：{fs[f]['diff']} 条数值不一致")
+
+        # 条件 b2：比例/绝对值超阈值
+        for f in ("volume", "amt", "oi"):
+            if fs.get(f, {}).get("diff", 0) > 0:
+                reasons.append(
+                    f"[b2] {f}：{fs[f]['diff']} 条超 0.1% 阈值不一致"
+                )
+        if fs.get("if_basis", {}).get("diff", 0) > 0:
+            reasons.append(
+                f"[b2] if_basis：{fs['if_basis']['diff']} 条绝对偏差≥0.001"
+            )
+
+        # 整合约缺失（条件 a 的整行体现）
+        miss = comp.get("missing_records", [])
+        non_tas = [r for r in miss if "TAS" not in (r.get("code") or "")]
+        if non_tas:
+            codes_str = ", ".join(r["code"] for r in non_tas[:5])
+            suffix = "..." if len(non_tas) > 5 else ""
+            reasons.append(
+                f"[a] {len(non_tas)} 条合约 exchange 缺失（非TAS）：{codes_str}{suffix}"
+            )
+
+        return reasons
 
     def send_email(
         self, date_str: str,
@@ -904,13 +967,15 @@ def main():
         else None
     )
     r = Reporter()
-    r.generate_daily(
+    result = r.generate_daily(
         date_str,
         skip_table_compare=args.skip_table_compare,
         skip_wind=args.skip_wind,
         sender=args.sender,
         email_recipients=recipients,
     )
+    if result.get("rollback"):
+        sys.exit(2)
 
 
 if __name__ == "__main__":

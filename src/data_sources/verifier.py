@@ -484,6 +484,10 @@ class Verifier:
                 if av is None and bv is None:
                     continue
                 if av is None and bv is not None:
+                    # TAS 合约：交易所 API 不提供，豁免条件 a
+                    if "TAS" in code:
+                        cr.total_matched += 1
+                        continue
                     cr.total_missing_original += 1
                     bvf = round(float(bv), _PRECISION.get(field, 4)) if isinstance(bv, (int, float)) else bv
                     if len(cr.sample_missing_in_original) < 5:
@@ -518,6 +522,10 @@ class Verifier:
                     ratio = abs_diff / abs(bvf) if bvf else 0
                     # vol/amt/oi 差异 ≤ 千分之一视为匹配（大数值浮点误差）
                     if field in ("volume", "amt", "oi") and ratio <= 0.001:
+                        cr.total_matched += 1
+                        continue
+                    # if_basis 绝对值 < 0.001 视为匹配（基差接近 0 时比例不稳定）
+                    if field == "if_basis" and abs_diff < 0.001:
                         cr.total_matched += 1
                         continue
                     cr.total_diff += 1

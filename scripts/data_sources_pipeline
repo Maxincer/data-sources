@@ -126,4 +126,13 @@ echo "[$(date '+%F %T')] Step 5/5: Reporting + email..."
 ${RUN_REPORTER} --sender "${SENDER}" --recipients "${RECIPIENTS}" ${REPORTER_OPTS} 2>&1
 
 STATUS=$?
+if [ $STATUS -eq 2 ]; then
+    # 回滚：删除当日写入数据
+    echo "[$(date '+%F %T')] 🔄 ROLLBACK triggered"
+    mysql -h "${DB_HOST}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_DATABASE}" \
+        -e "DELETE FROM \`${WRITER_TABLE}\` WHERE date='${TRADE_DATE}';"
+    echo "[$(date '+%F %T')] ✅ 已删除 ${WRITER_TABLE} 中 ${TRADE_DATE} 的数据"
+fi
+
 echo "[$(date '+%F %T')] ===== pipeline finished (status=${STATUS}) ====="
+exit $STATUS
