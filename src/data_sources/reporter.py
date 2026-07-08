@@ -218,9 +218,9 @@ class Reporter:
                 f"[b2] if_basis：{fs['if_basis']['diff']} 条绝对偏差≥0.001"
             )
 
-        # 整合约缺失（条件 a 的整行体现）
-        miss = comp.get("missing_records", [])
-        non_tas = [r for r in miss if "TAS" not in (r.get("code") or "")]
+        # 整合约缺失（条件 a 的整行体现）：WSS/ref 有但 exchange 无
+        extra = comp.get("extra_records", [])
+        non_tas = [r for r in extra if "TAS" not in (r.get("code") or "")]
         if non_tas:
             codes_str = ", ".join(r["code"] for r in non_tas[:5])
             suffix = "..." if len(non_tas) > 5 else ""
