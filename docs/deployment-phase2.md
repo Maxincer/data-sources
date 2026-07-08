@@ -27,18 +27,28 @@
 ### 2.1 下载与解压
 
 ```bash
-RELEASE="20260623-3f27876"
+RELEASE="20260708-"
 
-wget -O /tmp/${RELEASE}.tar.gz http://releases.corp.wendao.fund/data-sources/${RELEASE}.tar.gz
+wget -O /tmp/${RELEASE}.tar.gz http://releases.corp.wendao.fund/data-sources/${RELEASE}.tgz
 
-mkdir -p /tmp/data-sources && cd /tmp/data-sources && tar -xzf /tmp/${RELEASE}.tar.gz
+mkdir -p /tmp/data-sources && cd /tmp/data-sources && tar -xzf /tmp/${RELEASE}.tgz
 ```
 
+### 2.2 升级data-sources: v0.1.1 -> 0.1.2
 
+```bash
+pip3 install --user --no-index --upgrade --find-links=/tmp/data-sources/deploy/offline/pip-deps data_sources
+```
 
+### 2.3 修改`data_sources_pipeline`中的`WRITER_TABLE`为`t_futures_info`
 
+```bash
+vi ~/.local/bin/data-sources-pipeline
+```
 
-### 自动回滚
+## 3. 回滚
+
+### 3.1 自动回滚
 
 ```
 data_sources_pipeline Step 5: reporter —skip-table-compare
@@ -55,4 +65,10 @@ data_sources_pipeline Step 5: reporter —skip-table-compare
          │
          └── update_if_exclude_wsi.sh 检测 $? != 0
                └── 执行 t_futures_info.py（Wind 回退）
+```
+
+## 4. 清理
+
+```bash
+rm -rf /tmp/data-sources /tmp/${RELEASE}.tar.gz
 ```
