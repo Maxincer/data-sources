@@ -10,9 +10,9 @@ WRITER_TABLE="t_futures_info_exchange"
 # WRITER_TABLE="t_futures_info"  # phase 2
 WRITER_OPTS="--table $WRITER_TABLE"
 
-REPORTER_OPTS=""
-# 生产模式：跳过两表对比，仅做 WSS 交叉验证
 # DEV 模式：做两表对比（exchange vs t_futures_info），无 WSS
+# 生产模式：跳过两表对比，仅做 WSS 交叉验证
+REPORTER_OPTS=""
 if [ "${DEV:-0}" != "1" ]; then
     REPORTER_OPTS="$REPORTER_OPTS --skip-table-compare"
 fi
@@ -56,9 +56,8 @@ else
     export DB_PASSWORD="tools0512"
     export DB_DATABASE="future_cn"
     export DATA_DIR="/data2_backup/data_sources_data"
-    export LOG_DIR="/home/data_ops/log"
-    export PLAYWRIGHT_BROWSERS_PATH="/home/data_ops/playwright-browsers"
-    # 比对走主库（阶段一：exchange vs wind 都在 1.27）
+    export LOG_DIR="$HOME/log"
+    export PLAYWRIGHT_BROWSERS_PATH="$HOME/playwright-browsers"
     export REF_DB_HOST="192.168.1.27"
     export REF_DB_USER="tools"
     export REF_DB_PASSWORD="tools0512"
