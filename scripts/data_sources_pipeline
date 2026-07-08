@@ -4,16 +4,18 @@
 
 set -euo pipefail
 
-# TRADE_DATE="${1:-$(date +%Y%m%d)}"
-TRADE_DATE="20260707"
+TRADE_DATE="${1:-$(date +%Y%m%d)}"
 
 WRITER_TABLE="t_futures_info_exchange"
 # WRITER_TABLE="t_futures_info"  # phase 2
 WRITER_OPTS="--table $WRITER_TABLE"
 
-# SKIP_TABLE_COMPARE=1  # phase 2
 REPORTER_OPTS=""
-[ -n "${SKIP_TABLE_COMPARE:-}" ] && REPORTER_OPTS="$REPORTER_OPTS --skip-table-compare"
+# 生产模式：跳过两表对比，仅做 WSS 交叉验证
+# DEV 模式：做两表对比（exchange vs t_futures_info），无 WSS
+if [ "${DEV:-0}" != "1" ]; then
+    REPORTER_OPTS="$REPORTER_OPTS --skip-table-compare"
+fi
 
 # ── 模式 ──
 DEV="${DEV:-0}"
@@ -81,11 +83,11 @@ else
 fi
 
 # ---- 时间门禁 ----
-# CURRENT_HM=$(date +%H%M)
-# if [ "$CURRENT_HM" -lt 1630 ]; then
-#     echo "[$(date '+%F %T')] 当前 ${CURRENT_HM} < 1630，跳过 pipeline"
-#     exit 0
-# fi
+CURRENT_HM=$(date +%H%M)
+if [ "$CURRENT_HM" -lt 1630 ]; then
+    echo "[$(date '+%F %T')] 当前 ${CURRENT_HM} < 1630，跳过 pipeline"
+    exit 0
+fi
 
 # ---- 密码与收件人（env var fallback，部署人员可通过 rutask env 覆写）----
 export DAILY_START_DATE="${DAILY_START_DATE:-20251201}"
