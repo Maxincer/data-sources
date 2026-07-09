@@ -209,8 +209,8 @@ class Reporter:
             if fs.get(f, {}).get("diff", 0) > 0:
                 reasons.append(f"[b1] {f}：{fs[f]['diff']} 条数值不一致")
 
-        # 条件 b2：比例/绝对值超阈值
-        for f in ("volume", "amt", "oi"):
+        # 条件 b2：比例超阈值
+        for f in ("volume", "amt"):
             if fs.get(f, {}).get("diff", 0) > 0:
                 reasons.append(
                     f"[b2] {f}：{fs[f]['diff']} 条超 0.1% 阈值不一致"

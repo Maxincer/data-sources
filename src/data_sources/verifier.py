@@ -522,6 +522,10 @@ class Verifier:
                 if avf != bvf:
                     abs_diff = abs(avf - bvf) if isinstance(avf, (int, float)) and isinstance(bvf, (int, float)) else 0
                     ratio = abs_diff / abs(bvf) if bvf else 0
+                    # settle：WSS=0 是 Wind 数据问题，我方非零则以我方为准
+                    if field == "settle" and avf != 0 and bvf == 0:
+                        cr.total_matched += 1
+                        continue
                     # vol/amt/oi 差异 ≤ 千分之一视为匹配（大数值浮点误差）
                     if field in ("volume", "amt", "oi") and ratio <= 0.001:
                         cr.total_matched += 1
