@@ -5,7 +5,10 @@
 set -euo pipefail
 
 TRADE_DATE="${1:-$(date +%Y%m%d)}"
-MYSQL="/usr/bin/mysql"
+
+# MySQL 路径（dev/prod 各自配置，当前两者相同）
+DEV_MYSQL="/usr/bin/mysql"
+PROD_MYSQL="/usr/bin/mysql"
 
 WRITER_TABLE="t_futures_info_exchange"
 #WRITER_TABLE="t_futures_info"  # phase 2
@@ -132,7 +135,10 @@ echo "reporter exit: $STATUS"
 if [ $STATUS -ne 0 ]; then
     # 回滚：删除当日写入数据
     echo "[$(date '+%F %T')] 🔄 ROLLBACK triggered"
-    ${MYSQL} -h "${DB_HOST}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_DATABASE}" \
+    # 根据环境选择 mysql 路径
+    _MYSQL="${PROD_MYSQL}"
+    [ "$DEV" = "1" ] && _MYSQL="${DEV_MYSQL}"
+    ${_MYSQL} -h "${DB_HOST}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_DATABASE}" \
         -e "DELETE FROM \`${WRITER_TABLE}\` WHERE date='${TRADE_DATE}';"
     echo "[$(date '+%F %T')] ✅ 已删除 ${WRITER_TABLE} 中 ${TRADE_DATE} 的数据"
 fi
