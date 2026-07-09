@@ -85,6 +85,7 @@ class Reporter:
 
     def generate_daily(
         self, date_str: str, *,
+        source_table: str = "t_futures_info_exchange",
         skip_table_compare: bool = False,
         skip_wind: bool = False,
         sender: str | None = None,
@@ -94,6 +95,7 @@ class Reporter:
 
         Args:
             date_str: 交易日 YYYYMMDD
+            source_table: 源数据表名，阶段一为 t_futures_info_exchange，阶段二切换为 t_futures_info
             skip_table_compare: True=阶段二，跳过两表对比，仅做 WSS 交叉验证
             skip_wind: True=跳过 Wind WSS 交叉验证（开发/无 cpp_py 环境）
         """
@@ -123,14 +125,14 @@ class Reporter:
 
         # Build comparison results (shared by Feishu and email)
         comparisons: list[tuple[str, dict]] = []
-        ours = fetch_table("t_futures_info_exchange", date_str)
+        ours = fetch_table(source_table, date_str)
 
         if not skip_table_compare:
             # Phase 1a: 两表对比 (旧表 t_futures_info 可能在独立 DB)
             wind_tbl = fetch_table("t_futures_info", date_str, _ref_db)
             comp = v.compare_all(date_str, ours, wind_tbl)
             comparisons.append((
-                "cross-validation: t_futures_info_exchange vs t_futures_info",
+                f"cross-validation: {source_table} vs t_futures_info",
                 comp,
             ))
 
@@ -141,7 +143,7 @@ class Reporter:
             title = (
                 "cross-validation: t_futures_info vs wss"
                 if skip_table_compare
-                else "cross-validation: t_futures_info_exchange vs wss"
+                else f"cross-validation: {source_table} vs wss"
             )
             comparisons.append((title, wind_comp))
 
@@ -422,7 +424,7 @@ class Reporter:
     @staticmethod
     def _build_field_stats_section(stats: dict, abnormal: dict) -> str:
         """Section 2: field coverage + abnormal nulls."""
-        lines = ["**字段覆盖率统计** (t_futures_info_exchange):", ""]
+        lines = ["**字段覆盖率统计**", ""]
         for ex in sorted(stats.keys()):
             if ex == "CSI":
                 continue
@@ -964,6 +966,10 @@ def main():
         "--skip-wind", action="store_true",
         help="Skip Wind WSS cross-validation (dev / no cpp_py)",
     )
+    parser.add_argument(
+        "--table", default="t_futures_info_exchange",
+        help="Source table name (default: t_futures_info_exchange, phase 2: t_futures_info)",
+    )
     args = parser.parse_args()
 
     date_str = (
@@ -979,6 +985,7 @@ def main():
     r = Reporter()
     result = r.generate_daily(
         date_str,
+        source_table=args.table,
         skip_table_compare=args.skip_table_compare,
         skip_wind=args.skip_wind,
         sender=args.sender,
