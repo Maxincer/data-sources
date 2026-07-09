@@ -12,7 +12,7 @@ WRITER_OPTS="--table $WRITER_TABLE"
 
 # DEV 模式：做两表对比（exchange vs t_futures_info），无 WSS
 # 生产模式：跳过两表对比，仅做 WSS 交叉验证
-REPORTER_OPTS=""
+REPORTER_OPTS="--table $WRITER_TABLE"
 if [ "${DEV:-0}" != "1" ]; then
     REPORTER_OPTS="$REPORTER_OPTS --skip-table-compare"
 fi
