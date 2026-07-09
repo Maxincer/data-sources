@@ -83,8 +83,8 @@ fi
 
 # ---- 时间门禁 ----
 CURRENT_HM=$(date +%H%M)
-if [ "$CURRENT_HM" -lt 1630 ]; then
-    echo "[$(date '+%F %T')] 当前 ${CURRENT_HM} < 1630，跳过 pipeline"
+if [ "$CURRENT_HM" -lt 1610 ]; then
+    echo "[$(date '+%F %T')] 当前 ${CURRENT_HM} < 1610，跳过 pipeline"
     exit 0
 fi
 
