@@ -110,8 +110,8 @@ class Reporter:
         } or None
 
         v = Verifier(self.logger)
-        stats = v.get_field_stats(date_str)
-        abnormal = v.get_abnormal_nulls(date_str, ref_config_override=_ref_db)
+        stats = v.get_field_stats(date_str, source_table)
+        abnormal = v.get_abnormal_nulls(date_str, source_table, ref_config_override=_ref_db)
 
         feishu_sections = [
             self._build_file_size_section(date_str),

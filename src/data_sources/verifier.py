@@ -254,6 +254,7 @@ class Verifier:
     # -----------------------------------------------------------------
 
     def get_abnormal_nulls(self, target_date: str,
+                           table: str = "t_futures_info_exchange",
                            config_override: dict | None = None,
                            ref_config_override: dict | None = None) -> dict[str, list]:
         """
@@ -261,6 +262,7 @@ class Verifier:
 
         Args:
             target_date: YYYYMMDD
+            table: MySQL table name
             config_override: 新表 DB 配置 (默认走 env)
             ref_config_override: 旧表 DB 配置 (默认同新表)
 
@@ -274,7 +276,7 @@ class Verifier:
                 dt = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:8]}"
                 cur.execute(f"""
                     SELECT DISTINCT SUBSTRING_INDEX(code, '.', -1) AS ex
-                    FROM `{db}`.t_futures_info_exchange
+                    FROM `{db}`.`{table}`
                     WHERE date = '{dt}'
                     ORDER BY ex
                 """)
@@ -293,7 +295,7 @@ class Verifier:
                     col_list = "code, " + ", ".join(fields)
                     sql = f"""
                         SELECT {col_list}
-                        FROM `{db}`.t_futures_info_exchange
+                        FROM `{db}`.`{table}`
                         WHERE date = '{dt}'
                           AND SUBSTRING_INDEX(code, '.', -1) = '{ex}'
                           AND ({null_conditions})
