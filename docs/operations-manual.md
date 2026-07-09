@@ -1,6 +1,95 @@
 # 项目运维手册
 
-## 1. DCE CMS API 间歇性 403
+## 1. 环境变量配置
+
+### 数据库连接
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `DB_HOST` | 主库 Host | `192.168.1.202`（DEV）/ `192.168.1.27`（PROD） |
+| `DB_USER` | 主库用户 | `root`（DEV）/ `tools`（PROD） |
+| `DB_PASSWORD` | 主库密码 | — |
+| `DB_DATABASE` | 主库名称 | `future_cn` |
+| `REF_DB_HOST` | 比对库 Host（t_futures_info on Wind） | `192.168.1.27` |
+| `REF_DB_USER` | 比对库用户 | `tools` |
+| `REF_DB_PASSWORD` | 比对库密码 | — |
+| `REF_DB_DATABASE` | 比对库名称 | `future_cn` |
+
+### 运行模式
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `DEV` | 开发模式（1=启用）：加载 .venv、跳过 WSS 验证、使用 dev DB | `0` |
+| `SKIP_TABLE_COMPARE` | 跳过两表对比（1=启用），生产模式自动设 `1` | `0`（DEV）/ `1`（PROD） |
+| `DAILY_START_DATE` | 历史数据起始日期 | `20251201` |
+
+### 飞书告警
+
+| 变量 | 说明 |
+|------|------|
+| `FEISHU_WEBHOOK` | 飞书机器人 Webhook URL |
+
+### 邮件发送
+
+| 变量 | 说明 |
+|------|------|
+| `SMTP_HOST` | SMTP 服务器地址 |
+| `SMTP_PORT` | SMTP 端口 |
+| `SMTP_PASSWORD` | SMTP 密码 |
+| `SENDER` | 发件人邮箱 |
+| `RECIPIENTS` | 收件人列表（逗号分隔） |
+
+### 数据与日志
+
+| 变量 | 说明 | 默认值（DEV） |
+|------|------|-------------|
+| `DATA_DIR` | 原始数据存放目录 | `<项目根目录>/data` |
+| `LOG_DIR` | 日志输出目录 | `<项目根目录>/logs` |
+
+### 交易所 API
+
+| 变量 | 说明 |
+|------|------|
+| `DCE_API_KEY` | DCE CMS API Key |
+| `DCE_API_SECRET` | DCE CMS API Secret |
+
+### 行情数据 API
+
+| 变量 | 说明 |
+|------|------|
+| `TUSHARE_TOKEN` | Tushare API Token |
+
+### AI 模型 API
+
+| 变量 | 说明 |
+|------|------|
+| `ZHIPU_API_KEY` | 智谱 GLM API Key（公告解析/修正用） |
+| `DEEPSEEK_API_KEY` | DeepSeek API Key（数据解析/修正用） |
+
+### 搜索 API
+
+| 变量 | 说明 |
+|------|------|
+| `TAVILY_API_KEY` | Tavily 搜索 API Key（公告采集用） |
+
+### 运行环境
+
+| 变量 | 说明 |
+|------|------|
+| `LD_LIBRARY_PATH` | Playwright Chromium 系统库路径（含 libnspr4.so 等） |
+
+> **注**：上述变量在 启动脚本`data_sources_pipeline` 中按 DEV/PROD 模式自动设默认值，
+> 部署人员/运维人员可通过该脚本直接读写
+> 部署人员/运维人员可通过 rutask 的 `env` 字段覆写。
+
+## 2. 启动/中止方式
+
+- 启动方式：执行启动脚本`data_sources_pipeline`
+- 启动脚本路径可从部署文档获取
+- 中止方式：kill 命令即可 
+- 终止方式：run once脚本，自动终止
+
+## 3. DCE CMS API 间歇性 403
 
 ### 现象
 - **2026-06-10**：Fetcher 调用 DCE token 端点 (`/dceapi/cms/auth/accessToken`) 时返回 HTTP 403，两轮重试均失败
@@ -32,7 +121,7 @@ grep "DCE\|403\|token" logs/Fetcher.$(date +%Y%m%d).log | tail -20
 
 ---
 
-## 2. announcements_metadata.json 生命周期
+## 4. announcements_metadata.json 生命周期
 
 ### 写入
 
@@ -53,7 +142,7 @@ meta[key] = record  # 只增改, 不删
 
 ---
 
-## 3. 交易所列表页链接失效
+## 5. 交易所列表页链接失效
 
 ### 现象（2026-06-11）
 SHFE 品种细则列表页 (`productrules/`) 中提取到的两个老链接返回 404：
@@ -79,7 +168,7 @@ SHFE_20240903_802266 | 丁二烯橡胶期货业务细则
 
 ---
 
-## 4. DCE 新上市合约无前日交易参数
+## 6. DCE 新上市合约无前日交易参数
 
 ### 现象
 Writer 日志中出现以下 warning：
@@ -138,7 +227,7 @@ grep "无前日" logs/Writer.*.log | tail -10
 
 ---
 
-## 5. Writer "无前日保证金数据" 告警
+## 7. Writer "无前日保证金数据" 告警
 
 ### 现象
 Writer 日志中出现以下 warning：
