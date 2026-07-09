@@ -103,10 +103,17 @@ Reporter: exchange vs WSS 逐合约逐字段对比
   │
   ├── 条件 b1: 行情字段不精确相等
   │     → 回滚 ❌
+  │     ├── settle 例外：WSS=0 且 exchange≠0
+  │     │     → 豁免 ✅（Wind 数据异常，以我方为准）
+  │     └── 其余价格字段：精确相等判定
   │
   ├── 条件 b2: volume/amt/oi 比例>0.001
   │       if_basis 绝对值≥0.001
   │     → 回滚 ❌
+  │     ├── oi 不参与回滚判定
+  │     │     → 豁免 ✅（oi=0 为合法值，新/到期合约常见）
+  │     └── volume/amt：比例 0.1% 阈值
+  │         if_basis：绝对值 0.001 阈值
   │
   └── 条件 c: exchange≠NULL, WSS=NULL
         → 不触发 ✅
